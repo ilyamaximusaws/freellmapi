@@ -12,6 +12,7 @@ import type {
 import { routeRequest, resolveModelGroupCandidates, resolveRoutingChain, resolveStickyPreference, routingReserveTokens, failureAttributionFor, type RouteResult, type ResolvedChain, type ChainRow } from '../services/router.js';
 import { getSetting } from '../db/index.js';
 import { resolveAuth, prependSystemPrompt, type ResolvedAuth } from '../lib/system-prompt.js';
+import { admitInferenceClient } from './proxy.js';
 import { contentToString, estimateInputTokens } from '../lib/content.js';
 import { routeOutputBudget } from '../lib/output-cap.js';
 import { resolveTaskType } from '../lib/task-type.js';
@@ -516,6 +517,13 @@ export async function handleMessages(req: Request, res: Response): Promise<void>
   // then resolve the default against the budget remainder.
   const clientMaxTokens = body.max_tokens != null && body.max_tokens > 0 ? body.max_tokens : undefined;
   const { temperature, top_p, stream } = body;
+
+  // Per-client admission ([fork 1/10]) with an Anthropic-shaped rejection.
+  if (!(await admitInferenceClient(auth, req, res, {
+    requestedMaxTokens: clientMaxTokens,
+    estimatedTokens: clientMaxTokens ?? 0,
+    onReject: (status, type, message) => sendError(res, status, status === 429 ? 'rate_limit_error' : type, message),
+  }))) return;
 
   const converted = convertRequest(body);
   // Rejected before routing, and before compression: this is our verdict, not

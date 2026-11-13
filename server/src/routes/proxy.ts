@@ -14,6 +14,8 @@ import { runImageGeneration, runVideoGeneration, runSpeech, runTranscription, Me
 import multer from 'multer';
 import { getDb } from '../db/index.js';
 import { resolveAuth, prependSystemPrompt, type ResolvedAuth } from '../lib/system-prompt.js';
+import { admitClient } from '../services/client-limits.js';
+import { setRequestClientId } from '../lib/client-context.js';
 import { contentToString, estimateInputTokens, messageHasImage, normalizeOutboundContent, sanitizeResponse } from '../lib/content.js';
 import { routeOutputBudget } from '../lib/output-cap.js';
 import { resolveTaskType } from '../lib/task-type.js';
@@ -73,7 +75,58 @@ function requireInferenceAuth(req: Request, res: Response): ResolvedAuth | null 
     res.status(401).json({ error: { message: 'Invalid API key', type: 'authentication_error' } });
     return null;
   }
+  // Tag the request with its downstream client ([fork 1/10]) so the request log
+  // can split analytics per agent. The unified key is the default client: no id.
+  setRequestClientId(auth.kind === 'profile' ? auth.profileId : null);
   return auth;
+}
+
+/**
+ * Per-client admission control ([fork 1/10]). Runs after auth and after body
+ * validation, before any key is selected. Rejects with 429 (+Retry-After) for
+ * concurrency/RPM/TPM/cap violations, 400/413 for request-shape limits, and
+ * holds a concurrency slot for the duration of the response.
+ * The unified key (kind 'unified') is the unlimited default client: pass-through.
+ */
+export async function admitInferenceClient(
+  auth: ResolvedAuth,
+  req: Request,
+  res: Response,
+  opts: {
+    requestedMaxTokens?: number;
+    estimatedTokens?: number;
+    /** Route-family error writer; defaults to the OpenAI-shaped JSON body. */
+    onReject?: (status: number, type: string, message: string) => void;
+  } = {},
+): Promise<boolean> {
+  if (auth.kind !== 'profile') return true;
+  const rawLength = req.headers['content-length'];
+  const requestBytes = Number(Array.isArray(rawLength) ? rawLength[0] : rawLength ?? 0) || 0;
+  const admission = await admitClient(auth.profileId, {
+    requestedMaxTokens: opts.requestedMaxTokens,
+    estimatedTokens: opts.estimatedTokens ?? opts.requestedMaxTokens ?? 0,
+    requestBytes,
+  });
+  if (!admission.ok) {
+    if (admission.retryAfterSec != null) res.setHeader('Retry-After', String(admission.retryAfterSec));
+    const type = admission.status === 429 ? 'rate_limit_error' : 'invalid_request_error';
+    if (opts.onReject) {
+      opts.onReject(admission.status, type, admission.message);
+    } else {
+      res.status(admission.status).json({
+        error: {
+          message: admission.message,
+          type,
+          code: admission.status === 429 ? 'client_limit_exceeded' : 'invalid_request_error',
+        },
+      });
+    }
+    return false;
+  }
+  const release = admission.release;
+  res.on('finish', release);
+  res.on('close', release);
+  return true;
 }
 
 // Extract the unified API key from an incoming request. Accepts both the
@@ -1437,6 +1490,8 @@ proxyRouter.post('/completions', async (req: Request, res: Response) => {
   const aliasTierChain = claudeAlias?.kind === 'tier' ? resolveModelGroupCandidates(claudeAlias.dbIds) : [];
   const max_tokens = parsed.data.max_tokens != null && parsed.data.max_tokens > 0
     ? parsed.data.max_tokens : 128;
+  // Per-client admission ([fork 1/10]), as on /chat/completions.
+  if (!(await admitInferenceClient(auth, req, res, { requestedMaxTokens: parsed.data.max_tokens ?? undefined, estimatedTokens: max_tokens }))) return;
   const stop = providerSafeStop(parsed.data.stop);
   // A profile's enforced prompt goes ahead of the autocomplete system message.
   const messages = prependSystemPrompt(completionPromptToMessages(prompt, suffix), auth.systemPrompt);
@@ -1910,6 +1965,9 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
   const requestedMaxTokens = parsed.data.max_tokens ?? parsed.data.max_completion_tokens;
   let max_tokens = requestedMaxTokens != null && requestedMaxTokens > 0
     ? requestedMaxTokens : undefined;
+  // Per-client admission ([fork 1/10]): request-shape limits and the client's
+  // concurrency/RPM/TPM/cap budget are enforced here, before any key is picked.
+  if (!(await admitInferenceClient(auth, req, res, { requestedMaxTokens: requestedMaxTokens ?? undefined, estimatedTokens: max_tokens ?? 0 }))) return;
   // Extended sampling/output params (seed, penalties, response_format…),
   // spread into every options object below — including fusion fan-out.
   const samplingParams = pickSamplingParams(parsed.data);

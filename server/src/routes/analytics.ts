@@ -451,6 +451,43 @@ analyticsRouter.get('/by-client', (req: Request, res: Response) => {
   })));
 });
 
+// Stats grouped by the AUTHENTICATED downstream client ([fork 1/10]) — the
+// client_profiles row whose sk-cp-* token served the request. Distinct from
+// /by-client above, which groups by the User-Agent classification; this one
+// answers "how much did each agent consume". Requests made with the unified
+// key have client_id NULL and are reported as the pseudo-client `default`.
+analyticsRouter.get('/by-downstream-client', (req: Request, res: Response) => {
+  const range = (req.query.range as string) ?? '7d';
+  const since = getSinceTimestamp(range);
+  const rows = getDb().prepare(`
+    SELECT
+      r.client_id AS client_id,
+      cp.name AS name,
+      COUNT(*) AS requests,
+      SUM(CASE WHEN r.status = 'success' THEN 1 ELSE 0 END) * 100.0 / NULLIF(SUM(CASE WHEN r.status <> 'canceled' THEN 1 ELSE 0 END), 0) AS success_rate,
+      AVG(r.latency_ms) AS avg_latency_ms,
+      SUM(r.input_tokens) AS total_input_tokens,
+      SUM(r.output_tokens) AS total_output_tokens,
+      MAX(strftime('%Y-%m-%dT%H:%M:%SZ', r.created_at)) AS last_seen_at
+    FROM requests r
+    LEFT JOIN client_profiles cp ON cp.id = r.client_id
+    WHERE r.created_at >= ?
+    GROUP BY r.client_id
+    ORDER BY requests DESC
+  `).all(since) as any[];
+
+  res.json(rows.map(row => ({
+    clientId: row.client_id ?? null,
+    clientName: row.name ?? 'default',
+    requests: row.requests,
+    successRate: Math.round((row.success_rate ?? 0) * 10) / 10,
+    avgLatencyMs: Math.round(row.avg_latency_ms ?? 0),
+    totalInputTokens: row.total_input_tokens ?? 0,
+    totalOutputTokens: row.total_output_tokens ?? 0,
+    lastSeenAt: row.last_seen_at,
+  })));
+});
+
 // Stats grouped by API key. Raw-row scoped (the hourly aggregate has no key
 // dimension), LEFT JOINed to api_keys so a request whose key was later deleted
 // still shows up with a null label — the keyId is always returned.

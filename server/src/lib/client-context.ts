@@ -10,6 +10,11 @@ export interface ClientContext {
   /** The preset a decision model picked for this request (#1354), read by the
    *  router while the 'decision' strategy is active. Unset = Balanced. */
   routingStrategy?: PresetStrategy;
+  /** The authenticated downstream client (client_profiles.id) for this
+   *  request, set at inference auth ([fork 1/10]). NULL for the unified key,
+   *  which is the implicit unlimited `default` client. Read by the request log
+   *  so analytics can split traffic per agent. */
+  clientId?: number | null;
 }
 
 // Request-scoped caller identity, readable from anywhere below the middleware
@@ -58,4 +63,11 @@ export function getClientContext(): ClientContext {
 export function setRequestRoutingStrategy(strategy: PresetStrategy | undefined): void {
   const store = storage.getStore();
   if (store) store.routingStrategy = strategy;
+}
+
+/** Record which downstream client authenticated this request ([fork 1/10]).
+ *  A no-op outside a request scope (tests, background work). */
+export function setRequestClientId(clientId: number | null): void {
+  const store = storage.getStore();
+  if (store) store.clientId = clientId;
 }

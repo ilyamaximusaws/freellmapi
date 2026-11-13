@@ -30,6 +30,7 @@ import {
   completionReasoningText,
   traceRouteEvent,
   logRequest,
+  admitInferenceClient,
 } from './proxy.js';
 import { runFallbackLoop, newFallbackState, fallbackRoutingTokens, recordUpstreamSuccess, setFallbackHeaders, exhaustionErrorPayload, setExhaustionHeaders, type AttemptRecord } from '../lib/fallback-loop.js';
 import { routedViaValue, safeHeaderValue } from '../lib/header-value.js';
@@ -708,6 +709,13 @@ export async function handleResponses(req: Request, res: Response): Promise<void
   }
 
   const reqData = parsed.data;
+
+  // Per-client admission ([fork 1/10]): shape limits and the client's
+  // concurrency/RPM/TPM/cap budget, enforced before key selection.
+  if (!(await admitInferenceClient(auth, req, res, {
+    requestedMaxTokens: reqData.max_output_tokens ?? undefined,
+    estimatedTokens: reqData.max_output_tokens ?? 0,
+  }))) return;
 
   // Computer use can't survive the chat-completions translation either (no
   // computer tool, no screenshot context). Fail clearly instead of silently
