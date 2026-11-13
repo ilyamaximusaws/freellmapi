@@ -734,6 +734,8 @@
     "noModelsForProvider": "এই প্রদানকারীর জন্য কোনো মডেল কনফিগার করা হয়নি।",
     "testModels": "মডেল পরীক্ষা করুন",
     "monthlyRequestCapLabel": "মাসিক অনুরোধ সীমা",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "মাসিক টোকেন সীমা",
     "capUnlimitedPlaceholder": "সীমাহীন",
     "capEditHint": "সীমা প্রতি মাসের ১ তারিখে ০০:০০ UTC-তে রিসেট হয়। সীমাহীন রাখতে খালি রাখুন।",

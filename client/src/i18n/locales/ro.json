@@ -734,6 +734,8 @@
     "noModelsForProvider": "Niciun model configurat pentru acest furnizor.",
     "testModels": "Testează modelele",
     "monthlyRequestCapLabel": "Limită lunară de cereri",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Limită lunară de tokeni",
     "capUnlimitedPlaceholder": "Nelimitat",
     "capEditHint": "Limitele se resetează în ziua 1 la 00:00 UTC. Lasă gol pentru nelimitat.",

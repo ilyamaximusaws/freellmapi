@@ -734,6 +734,8 @@
     "noModelsForProvider": "Няма конфигурирани модели за този доставчик.",
     "testModels": "Тествай моделите",
     "monthlyRequestCapLabel": "Месечен лимит на заявки",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Месечен лимит на токени",
     "capUnlimitedPlaceholder": "Неограничен",
     "capEditHint": "Лимитите се нулират на 1-во число 00:00 UTC. Оставете празно за неограничен.",

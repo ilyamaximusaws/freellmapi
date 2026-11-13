@@ -734,6 +734,8 @@
     "noModelsForProvider": "Ko si awọn awoṣe ti a tunto fun olupese yii.",
     "testModels": "Ṣàdánwò àwọn àwòṣe",
     "monthlyRequestCapLabel": "Òpín ìbéèrè oṣooṣù",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Òpín token oṣooṣù",
     "capUnlimitedPlaceholder": "Kò ní òpín",
     "capEditHint": "A tún òpín ṣe ní ọjọ́ kìíní ní 00:00 UTC. Fi sílẹ̀ ṣófo fún aláìlópin.",

@@ -102,27 +102,82 @@ function pruneLeases(now: number): void {
   }
 }
 
+// ── Per-key concurrency cap ([fork 2/10]) ────────────────────────────────────
+//
+// Some free tiers meter concurrency per credential rather than per minute, so
+// parallel streams on one key mostly 429 each other. The cap used to be env-only
+// and unset by default; it now resolves key → platform env → global env →
+// runtime setting, with a global default of 3 so a shared key stops being
+// dogpiled out of the box. 0 (at any level, except the env vars, which keep
+// their legacy "unset means inherit" meaning) means unlimited.
+
+/** Runtime setting: default in-flight cap for keys without an override. */
+export const KEY_MAX_CONCURRENT_SETTING = 'key_max_concurrent_default';
+/** Runtime setting: how long a request waits for a busy pool before giving up. */
+export const KEY_CONCURRENCY_QUEUE_TIMEOUT_SETTING = 'key_concurrency_queue_timeout_ms';
+export const DEFAULT_KEY_MAX_CONCURRENT = 3;
+export const DEFAULT_KEY_CONCURRENCY_QUEUE_TIMEOUT_MS = 3000;
+
+function runtimeInt(setting: string, fallback: number, minimum: number): number {
+  const raw = withDb(db => db.prepare('SELECT value FROM settings WHERE key = ?').get(setting)) as
+    | { value: string } | undefined;
+  if (raw?.value === undefined) return fallback;
+  const n = Number(raw.value);
+  return Number.isInteger(n) && n >= minimum ? n : fallback;
+}
+
+/** Global default in-flight cap; 0 = unlimited. Read per call so a UI change
+ *  applies to the next request without a restart. */
+export function getKeyMaxConcurrentDefault(): number {
+  return runtimeInt(KEY_MAX_CONCURRENT_SETTING, DEFAULT_KEY_MAX_CONCURRENT, 0);
+}
+
+/** Queue wait before the router moves on to the next key; 0 disables waiting. */
+export function getKeyConcurrencyQueueTimeoutMs(): number {
+  return runtimeInt(KEY_CONCURRENCY_QUEUE_TIMEOUT_SETTING, DEFAULT_KEY_CONCURRENCY_QUEUE_TIMEOUT_MS, 0);
+}
+
+export type KeyConcurrencySource = 'key' | 'platform-env' | 'global-env' | 'setting';
+
+export interface KeyConcurrencyResolution {
+  /** null = unlimited. */
+  limit: number | null;
+  source: KeyConcurrencySource;
+}
+
 /**
- * Concurrent in-flight requests allowed per key, or null for unlimited.
- *
- * Some free tiers meter concurrency per credential rather than per minute, so
- * parallel streams on one key mostly 429 each other. But most do not, and
- * capping by default would serialise every provider and cost real throughput —
- * so this is opt-in. There is deliberately no built-in per-platform table: the
- * providers that behave this way are not documented well enough to assert a
- * number for them here, and a wrong default is worse than none.
- *
- * `MAX_CONCURRENT_REQUESTS_PER_KEY_<PLATFORM>` sets it for one platform;
- * `MAX_CONCURRENT_REQUESTS_PER_KEY` sets a fallback for all of them.
+ * Resolve a key's in-flight cap. Precedence: the key's own column, then the
+ * per-platform env var, then the global env var, then the runtime setting.
+ * `keyMaxConcurrent` is the api_keys.max_concurrent value: null/undefined
+ * inherits, 0 means unlimited.
  */
-export function getKeyConcurrencyLimit(platform: string): number | null {
-  const raw = process.env[`MAX_CONCURRENT_REQUESTS_PER_KEY_${platform.toUpperCase()}`]
-    ?? process.env.MAX_CONCURRENT_REQUESTS_PER_KEY;
-  if (raw !== undefined && raw.trim() !== '') {
-    const n = Number(raw);
-    if (Number.isInteger(n) && n > 0) return n;
+export function resolveKeyConcurrencyLimit(
+  platform: string,
+  keyMaxConcurrent?: number | null,
+): KeyConcurrencyResolution {
+  if (keyMaxConcurrent !== null && keyMaxConcurrent !== undefined) {
+    const n = Number(keyMaxConcurrent);
+    if (Number.isInteger(n) && n >= 0) {
+      return { limit: n === 0 ? null : n, source: 'key' };
+    }
   }
-  return null;
+  const platformRaw = process.env[`MAX_CONCURRENT_REQUESTS_PER_KEY_${platform.toUpperCase()}`];
+  if (platformRaw !== undefined && platformRaw.trim() !== '') {
+    const n = Number(platformRaw);
+    if (Number.isInteger(n) && n > 0) return { limit: n, source: 'platform-env' };
+  }
+  const globalRaw = process.env.MAX_CONCURRENT_REQUESTS_PER_KEY;
+  if (globalRaw !== undefined && globalRaw.trim() !== '') {
+    const n = Number(globalRaw);
+    if (Number.isInteger(n) && n > 0) return { limit: n, source: 'global-env' };
+  }
+  const setting = getKeyMaxConcurrentDefault();
+  return { limit: setting === 0 ? null : setting, source: 'setting' };
+}
+
+/** Concurrent in-flight requests allowed per key, or null for unlimited. */
+export function getKeyConcurrencyLimit(platform: string, keyMaxConcurrent?: number | null): number | null {
+  return resolveKeyConcurrencyLimit(platform, keyMaxConcurrent).limit;
 }
 
 /** Requests this process currently has in flight against one platform+key. */
@@ -136,11 +191,102 @@ export function inFlightForKey(platform: string, keyId: number, now = Date.now()
 }
 
 /** False when this key already has its allowed number of requests in the air.
- *  Always true when no cap is configured, which is the default. */
-export function canUseKeyConcurrency(platform: string, keyId: number, now = Date.now()): boolean {
-  const limit = getKeyConcurrencyLimit(platform);
+ *  Always true when the resolved cap is 0/unlimited. */
+export function canUseKeyConcurrency(
+  platform: string,
+  keyId: number,
+  now = Date.now(),
+  keyMaxConcurrent?: number | null,
+): boolean {
+  const limit = getKeyConcurrencyLimit(platform, keyMaxConcurrent);
   if (limit === null) return true;
   return inFlightForKey(platform, keyId, now) < limit;
+}
+
+// ── Queue-wait accounting ([fork 2/10]) ──────────────────────────────────────
+//
+// When every candidate key is at its concurrency cap the request waits briefly
+// for a slot (see routeRequestWaitingForSlot). The wait is attributed to the keys
+// that were actually saturated, so the dashboard can show "slots / queue wait"
+// per key. Process-local, like the leases it describes.
+
+interface QueueWaitStat { waits: number; totalMs: number; maxMs: number }
+const queueWaits = new Map<string, QueueWaitStat>();
+
+const qwKey = (platform: string, keyId: number) => `${platform}:${keyId}`;
+
+export function recordKeyQueueWait(platform: string, keyId: number, ms: number): void {
+  if (ms <= 0) return;
+  const k = qwKey(platform, keyId);
+  const stat = queueWaits.get(k) ?? { waits: 0, totalMs: 0, maxMs: 0 };
+  stat.waits += 1;
+  stat.totalMs += ms;
+  stat.maxMs = Math.max(stat.maxMs, ms);
+  queueWaits.set(k, stat);
+}
+
+export function keyQueueWaitStats(): Record<string, QueueWaitStat> {
+  return Object.fromEntries(queueWaits);
+}
+
+/** Test seam: drop accumulated queue-wait counters. */
+export function resetKeyQueueWaitStats(): void {
+  queueWaits.clear();
+}
+
+export interface KeyConcurrencySnapshot {
+  platform: string;
+  keyId: number;
+  inFlight: number;
+  limit: number | null;
+  queueWaits: number;
+  queueWaitMsAvg: number;
+  queueWaitMsMax: number;
+}
+
+/** Keys that have leases in flight, with their cap and wait stats. Scoped to
+ *  busy keys on purpose: an idle dashboard refresh stays a no-op query. */
+export function keyConcurrencySnapshot(now = Date.now()): KeyConcurrencySnapshot[] {
+  pruneLeases(now);
+  const busy = new Map<string, { platform: string; keyId: number; inFlight: number }>();
+  for (const lease of leases.values()) {
+    const k = qwKey(lease.platform, lease.keyId);
+    const entry = busy.get(k) ?? { platform: lease.platform, keyId: lease.keyId, inFlight: 0 };
+    entry.inFlight += 1;
+    busy.set(k, entry);
+  }
+  if (busy.size === 0) return [];
+  const overrides = withDb(db => db.prepare('SELECT id, platform, max_concurrent FROM api_keys').all()) as
+    | { id: number; platform: string; max_concurrent: number | null }[] | undefined;
+  const overrideFor = new Map((overrides ?? []).map(r => [qwKey(r.platform, r.id), r.max_concurrent]));
+
+  return [...busy.entries()].map(([k, entry]) => {
+    const stat = queueWaits.get(k);
+    return {
+      platform: entry.platform,
+      keyId: entry.keyId,
+      inFlight: entry.inFlight,
+      limit: resolveKeyConcurrencyLimit(entry.platform, overrideFor.get(k)).limit,
+      queueWaits: stat?.waits ?? 0,
+      queueWaitMsAvg: stat ? Math.round(stat.totalMs / stat.waits) : 0,
+      queueWaitMsMax: stat?.maxMs ?? 0,
+    };
+  });
+}
+
+/** Keys currently at (or over) their resolved in-flight cap — the ones that
+ *  force a request into the concurrency queue. */
+export function saturatedKeys(now = Date.now()): { platform: string; keyId: number }[] {
+  return keyConcurrencySnapshot(now)
+    .filter(snap => snap.limit !== null && snap.inFlight >= snap.limit)
+    .map(snap => ({ platform: snap.platform, keyId: snap.keyId }));
+}
+
+/** Attribute a wait to every key currently at its cap — the ones that forced it. */
+export function recordQueueWaitForBusyKeys(ms: number, now = Date.now()): void {
+  for (const key of saturatedKeys(now)) {
+    recordKeyQueueWait(key.platform, key.keyId, ms);
+  }
 }
 
 /** Take a lease for an attempt about to be dispatched. Returns the id to release. */

@@ -734,6 +734,8 @@
     "noModelsForProvider": "ਇਸ ਪ੍ਰਦਾਤਾ ਲਈ ਕੋਈ ਮਾਡਲ ਕੌਂਫਿਗਰ ਨਹੀਂ ਕੀਤਾ ਗਿਆ ਹੈ।",
     "testModels": "ਮਾਡਲ ਟੈਸਟ ਕਰੋ",
     "monthlyRequestCapLabel": "ਮਹੀਨਾਵਾਰੀ ਬੇਨਤੀ ਸੀਮਾ",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "ਮਹੀਨਾਵਾਰੀ ਟੋਕਨ ਸੀਮਾ",
     "capUnlimitedPlaceholder": "ਅਸੀਮਤ",
     "capEditHint": "ਸੀਮਾਵਾਂ ਹਰ ਮਹੀਨੇ 1 ਤਾਰੀਖ਼ ਨੂੰ 00:00 UTC 'ਤੇ ਰੀਸੈੱਟ ਹੁੰਦੀਆਂ ਹਨ। ਅਸੀਮਤ ਲਈ ਖਾਲੀ ਛੱਡੋ।",

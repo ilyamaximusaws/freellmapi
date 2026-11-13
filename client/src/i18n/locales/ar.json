@@ -734,6 +734,8 @@
     "noModelsForProvider": "لا توجد نماذج مهيأة لهذا المزود.",
     "testModels": "اختبار النماذج",
     "monthlyRequestCapLabel": "الحد الشهري للطلبات",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "الحد الشهري للرموز",
     "capUnlimitedPlaceholder": "غير محدود",
     "capEditHint": "تُصفَّر الحدود في 1 من الشهر 00:00 بتوقيت UTC. اتركه فارغًا بلا حد.",

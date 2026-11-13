@@ -5,6 +5,7 @@ import { FALLBACK_INPUT_PER_M, FALLBACK_OUTPUT_PER_M } from '../db/model-pricing
 import { providerIdFor, providerDisplayName } from '../lib/provider-identity.js';
 import { normalizeBaseUrl } from '../lib/endpoint-scope.js';
 import { searchAnalytics, type SearchAnalyticsRange } from '../services/search.js';
+import { keyConcurrencySnapshot } from '../services/ratelimit.js';
 
 export const analyticsRouter = Router();
 
@@ -449,6 +450,13 @@ analyticsRouter.get('/by-client', (req: Request, res: Response) => {
     totalOutputTokens: row.total_output_tokens ?? 0,
     lastSeenAt: row.last_seen_at,
   })));
+});
+
+// Live per-key concurrency ([fork 2/10]): for every key with requests in
+// flight, its cap and how often/long requests queue-waited for a slot. Idle
+// keys are omitted so an open dashboard never triggers a full scan.
+analyticsRouter.get('/key-concurrency', (_req: Request, res: Response) => {
+  res.json(keyConcurrencySnapshot());
 });
 
 // Stats grouped by the AUTHENTICATED downstream client ([fork 1/10]) — the

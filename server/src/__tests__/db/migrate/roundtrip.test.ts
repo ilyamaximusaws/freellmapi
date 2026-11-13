@@ -55,6 +55,7 @@ const CLOUDFLARE_NEURON_USAGE_FILENAME = '20261104_000001_cloudflare_neuron_usag
 const MODEL_MONTHLY_USAGE_FILENAME = '20261111_000001_model_monthly_usage.ts';
 const PROFILE_ROUTING_STRATEGY_FILENAME = '20261111_000002_profile_routing_strategy.ts';
 const CLIENT_LIMITS_FILENAME = '20261114_000001_client_limits.ts';
+const KEY_CONCURRENCY_FILENAME = '20261114_000002_key_concurrency.ts';
 
 interface SchemaRow {
   type: string;
@@ -157,6 +158,7 @@ describe('migration round trip', () => {
         MODEL_MONTHLY_USAGE_FILENAME,
         PROFILE_ROUTING_STRATEGY_FILENAME,
         CLIENT_LIMITS_FILENAME,
+        KEY_CONCURRENCY_FILENAME,
       ]);
     } finally {
       db.close();

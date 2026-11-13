@@ -734,6 +734,8 @@
     "noModelsForProvider": "Aucun modèle configuré pour ce fournisseur.",
     "testModels": "Tester les modèles",
     "monthlyRequestCapLabel": "Plafond mensuel de requêtes",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Plafond mensuel de jetons",
     "capUnlimitedPlaceholder": "Illimité",
     "capEditHint": "Les plafonds sont réinitialisés le 1er à 00:00 UTC. Laissez vide pour illimité.",

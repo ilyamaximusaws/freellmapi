@@ -734,6 +734,8 @@
     "noModelsForProvider": "Šiam teikėjui nėra sukonfigūruotų modelių.",
     "testModels": "Testuoti modelius",
     "monthlyRequestCapLabel": "Mėnesinis užklausų limitas",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Mėnesinis žetonų limitas",
     "capUnlimitedPlaceholder": "Neribota",
     "capEditHint": "Limitai atstatomi 1 d. 00:00 UTC. Palikite tuščią neribotam.",

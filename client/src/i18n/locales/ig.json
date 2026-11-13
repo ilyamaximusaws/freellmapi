@@ -734,6 +734,8 @@
     "noModelsForProvider": "Enweghị ụdị ahaziri maka onye na-enye ọrụ a.",
     "testModels": "Nwalee ụdị",
     "monthlyRequestCapLabel": "Oke arịrịọ ọnwa",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Oke token ọnwa",
     "capUnlimitedPlaceholder": "Enweghị oke",
     "capEditHint": "A na-ebugharị oke ụbọchị nke 1, 00:00 UTC. Hapụ oghere maka enweghị oke.",

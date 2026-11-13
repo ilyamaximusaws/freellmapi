@@ -7,6 +7,9 @@ import {
   inFlightForKey,
   canUseKeyConcurrency,
   getKeyConcurrencyLimit,
+  resolveKeyConcurrencyLimit,
+  getKeyMaxConcurrentDefault,
+  resetKeyQueueWaitStats,
 } from '../../services/ratelimit.js';
 
 /**
@@ -103,10 +106,20 @@ describe('per-key concurrency cap', () => {
     delete process.env.MAX_CONCURRENT_REQUESTS_PER_KEY_GROQ;
   });
 
-  it('is unlimited by default — capping every provider would cost throughput', () => {
-    expect(getKeyConcurrencyLimit('groq')).toBeNull();
-    for (let i = 0; i < 25; i++) acquireLease('groq', 'llama-3.3-70b', 1, 100);
-    expect(canUseKeyConcurrency('groq', 1)).toBe(true);
+  // [fork 2/10]: the cap is no longer opt-in — it defaults to the runtime
+  // setting (3) so a shared key stops being dogpiled out of the box.
+  it('defaults to the runtime setting when nothing overrides it', () => {
+    expect(getKeyMaxConcurrentDefault()).toBe(3);
+    expect(getKeyConcurrencyLimit('groq')).toBe(3);
+    expect(resolveKeyConcurrencyLimit('groq', null).source).toBe('setting');
+  });
+
+  it('lets the key column override everything, with 0 = unlimited', () => {
+    process.env.MAX_CONCURRENT_REQUESTS_PER_KEY = '5';
+    expect(resolveKeyConcurrencyLimit('groq', 2)).toMatchObject({ limit: 2, source: 'key' });
+    expect(resolveKeyConcurrencyLimit('groq', 0)).toMatchObject({ limit: null, source: 'key' });
+    // null inherits down the chain.
+    expect(resolveKeyConcurrencyLimit('groq', null)).toMatchObject({ limit: 5, source: 'global-env' });
   });
 
   it('reads a per-platform env cap ahead of the global one', () => {
@@ -116,11 +129,11 @@ describe('per-key concurrency cap', () => {
     expect(getKeyConcurrencyLimit('cerebras')).toBe(5);
   });
 
-  it('ignores a malformed cap rather than blocking everything', () => {
+  it('ignores a malformed env cap and falls through to the setting', () => {
     process.env.MAX_CONCURRENT_REQUESTS_PER_KEY_GROQ = 'not-a-number';
-    expect(getKeyConcurrencyLimit('groq')).toBeNull();
+    expect(getKeyConcurrencyLimit('groq')).toBe(3);
     process.env.MAX_CONCURRENT_REQUESTS_PER_KEY_GROQ = '0';
-    expect(getKeyConcurrencyLimit('groq')).toBeNull();
+    expect(getKeyConcurrencyLimit('groq')).toBe(3);
   });
 
   it('blocks a key at its cap and frees it on release', () => {

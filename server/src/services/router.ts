@@ -16,6 +16,7 @@ import {
   getSoonestCooldownExpiry,
   modelWindowUsedFraction,
 } from './ratelimit.js';
+import { withConcurrencySlotWait, type SlotWaitOptions } from '../lib/concurrency-slot-wait.js';
 import {
   BANDIT_PRESETS, DEFAULT_STRATEGY, type PresetStrategy, type RoutingStrategy, type RoutingWeights,
   type KeySelectionStrategy,
@@ -145,6 +146,8 @@ interface KeyRow {
   // Optional JSON array of model_id strings this key may serve; NULL = every
   // model of its platform (#657).
   model_scope_json: string | null;
+  // Per-key in-flight cap override ([fork 2/10]); NULL = inherit, 0 = unlimited.
+  max_concurrent?: number | null;
   // Encrypted per-key proxy override (#590); all NULL = no override.
   proxy_encrypted: string | null;
   proxy_iv: string | null;
@@ -1697,7 +1700,7 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
     // Skip a key that already has its allowed requests in the air. Without this,
     // parallel streams all pick the same key and 429 each other on providers that
     // meter concurrency per credential.
-    if (!canUseKeyConcurrency(entry.platform, key.id)) { note('key-concurrency'); continue; }
+    if (!canUseKeyConcurrency(entry.platform, key.id, Date.now(), key.max_concurrent ?? null)) { note('key-concurrency'); continue; }
     if (!canMakeRequest(entry.platform, entry.model_id, key.id, limits)) { note('rpm/rpd-limit'); continue; }
     if (!canUseTokens(entry.platform, entry.model_id, key.id, estimatedTokens, limits)) { note('tpm/tpd-limit'); continue; }
     if (!canUseProviderTokens(entry.platform, key.id, entry.model_id, estimatedTokens)) { note('provider-daily-token-cap'); continue; }
@@ -2593,4 +2596,36 @@ export function hasEnabledVisionModel(): boolean {
 export function hasEnabledToolsModel(): boolean {
   const db = getDb();
   return getActiveChain(db).some(entry => entry.enabled === 1 && entry.supports_tools === 1);
+}
+
+
+/**
+ * routeRequest + a bounded wait for a per-key concurrency slot ([fork 2/10]).
+ * Thin delegate to lib/concurrency-slot-wait.ts: the surfaces wrap their own
+ * `routeRequest` reference instead of calling this, so test doubles that mock
+ * that import keep working. Kept exported for direct/simulation use.
+ */
+export async function routeRequestWaitingForSlot(
+  estimatedTokens = 1000,
+  skipKeys?: Set<string>,
+  preferredModelDbId?: number,
+  requireVision = false,
+  requireTools = false,
+  skipModels?: Set<number>,
+  prefetchedChain?: ChainRow[],
+  requireStructured = false,
+  skipPlatforms?: Set<string>,
+  exactOutputReserve = 0,
+  task?: 'code' | 'chat',
+  strategyOverride?: PresetStrategy,
+  opts: SlotWaitOptions = {},
+): Promise<RouteResult> {
+  return withConcurrencySlotWait(
+    () => routeRequest(
+      estimatedTokens, skipKeys, preferredModelDbId, requireVision, requireTools,
+      skipModels, prefetchedChain, requireStructured, skipPlatforms, exactOutputReserve,
+      task, strategyOverride,
+    ),
+    opts,
+  );
 }

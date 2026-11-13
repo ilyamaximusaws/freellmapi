@@ -734,6 +734,8 @@
     "noModelsForProvider": "Geen modellen geconfigureerd voor deze provider.",
     "testModels": "Modellen testen",
     "monthlyRequestCapLabel": "Maandelijke limiet verzoeken",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Maandelijke limiet tokens",
     "capUnlimitedPlaceholder": "Onbeperkt",
     "capEditHint": "Limieten worden op de 1e om 00:00 UTC gereset. Laat leeg voor onbeperkt.",

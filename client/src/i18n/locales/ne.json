@@ -734,6 +734,8 @@
     "noModelsForProvider": "यस प्रदायकको लागि कुनै मोडेल कन्फिगर गरिएको छैन।",
     "testModels": "मोडेलहरू परीक्षण गर्नुहोस्",
     "monthlyRequestCapLabel": "मासिक अनुरोध सीमा",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "मासिक टोकन सीमा",
     "capUnlimitedPlaceholder": "असीमित",
     "capEditHint": "सीमा हरेक महिनाको १ गते ००:०० UTC मा रिसेट हुन्छ। असीमितका लागि खाली राख्नुहोस्।",

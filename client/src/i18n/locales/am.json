@@ -734,6 +734,8 @@
     "noModelsForProvider": "ለዚህ አቅራቢ የተዋቀረ ሞዴል የለም።",
     "testModels": "ሞዴሎችን ይሞክሩ",
     "monthlyRequestCapLabel": "ወርሃዊ የጥያቄ ገደብ",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "ወርሃዊ የቶከን ገደብ",
     "capUnlimitedPlaceholder": "ወሰን የለሽ",
     "capEditHint": "ገደቦች በእያንዳንዱ ወር 1 ቀን 00:00 UTC ዳግም ይጀምራሉ። ለወሰን አልባ ባዶ ይተዉ።",

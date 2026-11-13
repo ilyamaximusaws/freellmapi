@@ -734,6 +734,8 @@
     "noModelsForProvider": "هیچ مدلی برای این ارائه‌دهنده تنظیم نشده است.",
     "testModels": "آزمایش مدل‌ها",
     "monthlyRequestCapLabel": "سقف ماهانه درخواست‌ها",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "سقف ماهانه توکن‌ها",
     "capUnlimitedPlaceholder": "نامحدود",
     "capEditHint": "سقف‌ها در اول هر ماه ساعت ۰۰:۰۰ UTC بازنشانی می‌شوند. برای نامحدود خالی بگذارید.",

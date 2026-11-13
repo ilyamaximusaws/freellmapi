@@ -1363,7 +1363,12 @@ export interface FallbackHooks {
    * Throws the router's RouteError when the pool is exhausted before any
    * upstream is tried (caught by the loop → onRoutingExhausted).
    */
-  route(attempt: number): RouteResult;
+  /**
+   * Pick a route for this attempt. May be async: the per-key concurrency queue
+   * ([fork 2/10]) waits briefly for a saturated key pool before giving up, and
+   * the loop awaits the result before classifying the failure as exhaustion.
+   */
+  route(attempt: number): RouteResult | Promise<RouteResult>;
 
   /**
    * Run one attempt against the chosen route. Return 'done' on success or
@@ -1483,7 +1488,7 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
 
     let route: RouteResult;
     try {
-      route = hooks.route(attempt);
+      route = await hooks.route(attempt);
     } catch (routeErr) {
       // With no candidate to supply an endpoint-specific allowance, retain
       // the original timeout diagnosis when the base budget is already spent.

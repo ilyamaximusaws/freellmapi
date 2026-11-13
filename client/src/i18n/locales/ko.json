@@ -734,6 +734,8 @@
     "noModelsForProvider": "이 제공자에 구성된 모델이 없습니다.",
     "testModels": "모델 테스트",
     "monthlyRequestCapLabel": "월 요청 한도",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "월 토큰 한도",
     "capUnlimitedPlaceholder": "무제한",
     "capEditHint": "한도는 매월 1일 00:00 UTC에 초기화됩니다. 무제한이려면 비워 두세요.",

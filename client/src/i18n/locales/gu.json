@@ -734,6 +734,8 @@
     "noModelsForProvider": "આ પ્રદાતા માટે કોઈ મોડેલો રૂપરેખાંકિત નથી.",
     "testModels": "મોડેલ્સનું પરીક્ષણ કરો",
     "monthlyRequestCapLabel": "માસિક વિનંતી મર્યાદા",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "માસિક ટોકન મર્યાદા",
     "capUnlimitedPlaceholder": "અમર્યાદિત",
     "capEditHint": "મર્યાદા દર મહિને 1 તારીખે 00:00 UTC પર રીસેટ થાય છે. અમર્યાદિત માટે ખાલી રાખો.",

@@ -734,6 +734,8 @@
     "noModelsForProvider": "Tälle palveluntarjoajalle ei ole määritetty malleja.",
     "testModels": "Testaa malleja",
     "monthlyRequestCapLabel": "Kuukausittainen pyyntöraja",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Kuukausittainen tokenraja",
     "capUnlimitedPlaceholder": "Rajoittamaton",
     "capEditHint": "Rajat nollautuvat kuun 1. päivänä 00:00 UTC. Jätä tyhjäksi rajoittamattomaan.",

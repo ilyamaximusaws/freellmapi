@@ -734,6 +734,8 @@
     "noModelsForProvider": "Hakuna miundo iliyowekwa kwa mtoa huduma huyu.",
     "testModels": "Jaribu miundo",
     "monthlyRequestCapLabel": "Kikomo cha kila mwezi cha maombi",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Kikomo cha kila mwezi cha tokeni",
     "capUnlimitedPlaceholder": "Bila kikomo",
     "capEditHint": "Vikomo huwekwa upya tarehe 1 saa 00:00 UTC. Acha wazi bila kikomo.",

@@ -11,7 +11,7 @@ import { encrypt, decrypt, maskKey } from '../lib/crypto.js';
 import { parseKeysFromFile, stripJsoncComments, stripTrailingCommas } from '../lib/key-parser.js';
 import { assessProviderUrl } from '../lib/url-guard.js';
 import { verifyCredentials, recordReauthFailure, clearReauthFailures } from '../services/auth.js';
-import { getActiveCooldownsForKeys, clearCooldownsForKey, clearApinexCheckinCooldownsForKey } from '../services/ratelimit.js';
+import { getActiveCooldownsForKeys, clearCooldownsForKey, clearApinexCheckinCooldownsForKey, resolveKeyConcurrencyLimit } from '../services/ratelimit.js';
 import { getMonthlyBudgetCaps, getMonthlyUsage, nextMonthResetAt } from '../services/key-budget.js';
 import { resolveCustomEndpointKey, customEndpointKeyIds, siblingEndpointKeyId, endpointHasCredential, normalizeGroupLabel, setCustomEndpointGroup } from '../services/custom-endpoint.js';
 import { registerCustomModels, registerCustomChatModels } from '../services/custom-model-register.js';
@@ -140,6 +140,8 @@ const addKeySchema = z.object({
   key: z.string().optional(),
   label: z.string().optional(),
   proxyUrl: proxyUrlSchema.optional(),
+  // Per-key in-flight cap ([fork 2/10]): 0 = unlimited, absent = inherit.
+  maxConcurrent: z.number().int().min(0).max(1000).optional(),
 });
 
 // `modelScope` (#657): the model_id list this key may serve — relay stations
@@ -159,8 +161,10 @@ const updateKeySchema = z.object({
   groupLabel: z.string().trim().max(80).optional(),
   // An absent credential leaves the encrypted key untouched.
   key: z.string().trim().min(1).optional(),
-}).refine(data => data.enabled !== undefined || data.label !== undefined || data.modelScope !== undefined || data.proxyUrl !== undefined || data.key !== undefined || data.monthlyRequestCap !== undefined || data.monthlyTokenCap !== undefined || data.groupLabel !== undefined, {
-  message: 'At least one of enabled, label, modelScope, proxyUrl, key, monthlyRequestCap, monthlyTokenCap or groupLabel must be provided',
+  // Per-key in-flight cap ([fork 2/10]): 0 = unlimited, null = inherit.
+  maxConcurrent: z.number().int().min(0).max(1000).nullable().optional(),
+}).refine(data => data.enabled !== undefined || data.label !== undefined || data.modelScope !== undefined || data.proxyUrl !== undefined || data.key !== undefined || data.monthlyRequestCap !== undefined || data.monthlyTokenCap !== undefined || data.groupLabel !== undefined || data.maxConcurrent !== undefined, {
+  message: 'At least one of enabled, label, modelScope, proxyUrl, key, monthlyRequestCap, monthlyTokenCap, groupLabel or maxConcurrent must be provided',
 });
 
 const importKeySchema = z.object({
@@ -488,6 +492,10 @@ keysRouter.get('/', (_req: Request, res: Response) => {
       groupLabel: row.group_label ?? null,
       monthlyRequestCap: budgetCaps.requestCap,
       monthlyTokenCap: budgetCaps.tokenCap,
+      // Per-key in-flight cap ([fork 2/10]): raw column + the value actually
+      // enforced after the key/platform/global/setting precedence chain.
+      maxConcurrent: row.max_concurrent ?? null,
+      effectiveMaxConcurrent: resolveKeyConcurrencyLimit(row.platform, row.max_concurrent).limit,
       monthlyUsage: {
         requests: monthlyUsage.requests,
         tokens: monthlyUsage.tokens,
@@ -850,10 +858,11 @@ keysRouter.post('/', (req: Request, res: Response) => {
   // #590: the proxy URL is encrypted like the key itself — it usually embeds
   // `user:pass@` credentials. Absent/'' stores NULLs = no override.
   const proxy = encryptProxyUrl(proxyUrl);
+  const maxConcurrent = parsed.data.maxConcurrent ?? null;
   const result = db.prepare(`
-    INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled, proxy_encrypted, proxy_iv, proxy_auth_tag)
-    VALUES (?, ?, ?, ?, ?, 'unknown', 1, ?, ?, ?)
-  `).run(platform, label ?? '', encrypted, iv, authTag, proxy.encrypted, proxy.iv, proxy.authTag);
+    INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled, proxy_encrypted, proxy_iv, proxy_auth_tag, max_concurrent)
+    VALUES (?, ?, ?, ?, ?, 'unknown', 1, ?, ?, ?, ?)
+  `).run(platform, label ?? '', encrypted, iv, authTag, proxy.encrypted, proxy.iv, proxy.authTag, maxConcurrent);
 
   // #1348: fetch the provider's models in the background when the catalog
   // carries none for it. No-op for every other platform.
@@ -1920,7 +1929,7 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
     return;
   }
 
-  const { enabled, label, modelScope, proxyUrl, key, monthlyRequestCap, monthlyTokenCap, groupLabel } = parsed.data;
+  const { enabled, label, modelScope, proxyUrl, key, monthlyRequestCap, monthlyTokenCap, groupLabel, maxConcurrent } = parsed.data;
   const updates: string[] = [];
   const values: (string | number | null)[] = [];
   let changedKey: string | undefined;
@@ -1984,6 +1993,12 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
   if (monthlyTokenCap !== undefined) {
     updates.push('monthly_token_cap = ?');
     values.push(monthlyTokenCap);
+  }
+  // Per-key in-flight cap ([fork 2/10]): 0 = unlimited, null = inherit. Read
+  // on every request by the router, so a PATCH applies without a restart.
+  if (maxConcurrent !== undefined) {
+    updates.push('max_concurrent = ?');
+    values.push(maxConcurrent);
   }
   // Custom-endpoint group label (#1176) is written below, across the
   // endpoint's whole key pool rather than this one row.

@@ -19,6 +19,8 @@ type UpdateBody = {
   key?: string
   monthlyRequestCap?: number
   monthlyTokenCap?: number
+  // Per-key in-flight cap ([fork 2/10]): 0 = unlimited, null = inherit.
+  maxConcurrent?: number | null
   groupLabel?: string
   proxyUrl?: string
 }
@@ -102,6 +104,11 @@ export function EditKeyDialog({
   // the dashboard at all; it shipped API-only. Empty = unlimited.
   const [requestCap, setRequestCap] = useState(capToInput(apiKey.monthlyRequestCap))
   const [tokenCap, setTokenCap] = useState(capToInput(apiKey.monthlyTokenCap))
+  // Per-key concurrency cap ([fork 2/10]): blank = inherit the provider/global
+  // cap, 0 = unlimited, N = at most N requests in flight on this credential.
+  const [maxConcurrentInput, setMaxConcurrentInput] = useState(
+    apiKey.maxConcurrent == null ? '' : String(apiKey.maxConcurrent),
+  )
   // Per-key proxy (#590, #1526): shipped API-only. Like the credential, the
   // field starts empty and the saved proxy shows masked beside it, so the
   // masked password can never be submitted back over the real one.
@@ -128,9 +135,15 @@ export function EditKeyDialog({
   const capError = requestCapValue === null || tokenCapValue === null
   const requestCapChanged = requestCapValue !== (apiKey.monthlyRequestCap || 0)
   const tokenCapChanged = tokenCapValue !== (apiKey.monthlyTokenCap || 0)
+  const maxConcurrentTrimmed = maxConcurrentInput.trim()
+  const maxConcurrentValid = maxConcurrentTrimmed === '' || /^\d+$/.test(maxConcurrentTrimmed)
+  const maxConcurrentValue = maxConcurrentTrimmed === ''
+    ? null
+    : maxConcurrentValid ? Number(maxConcurrentTrimmed) : null
+  const maxConcurrentChanged = (apiKey.maxConcurrent ?? null) !== maxConcurrentValue
   const groupLabelChanged = isCustom && groupLabel.trim() !== (apiKey.groupLabel ?? '')
   const proxyChanged = Boolean(proxyUrl.trim()) || clearProxy
-  const hasChanges = label !== apiKey.label || Boolean(credential) || requestCapChanged || tokenCapChanged || groupLabelChanged || proxyChanged
+  const hasChanges = label !== apiKey.label || Boolean(credential) || requestCapChanged || tokenCapChanged || groupLabelChanged || proxyChanged || maxConcurrentChanged
 
   const updateKey = useMutation({
     mutationFn: (body: UpdateBody) =>
@@ -144,7 +157,7 @@ export function EditKeyDialog({
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (credentialError || capError) {
+    if (credentialError || capError || !maxConcurrentValid) {
       setAttempted(true)
       return
     }
@@ -154,6 +167,7 @@ export function EditKeyDialog({
     if (credential) body.key = credential
     if (requestCapChanged && requestCapValue !== null) body.monthlyRequestCap = requestCapValue
     if (tokenCapChanged && tokenCapValue !== null) body.monthlyTokenCap = tokenCapValue
+    if (maxConcurrentChanged && maxConcurrentValid) body.maxConcurrent = maxConcurrentValue
     if (groupLabelChanged) body.groupLabel = groupLabel.trim()
     // '' clears the override; a typed URL replaces it (and wins over Remove).
     if (proxyChanged) body.proxyUrl = proxyUrl.trim()
@@ -320,6 +334,22 @@ export function EditKeyDialog({
               </div>
             ) : null}
           </details>
+
+          {/* Per-key concurrency ([fork 2/10]): how many requests may be in
+              flight against this credential at once. */}
+          <div className="space-y-1.5">
+            <Label className="text-xs" htmlFor="edit-key-max-concurrent">{t('keys.keyConcurrencyLabel')}</Label>
+            <Input
+              id="edit-key-max-concurrent"
+              inputMode="numeric"
+              value={maxConcurrentInput}
+              onChange={e => setMaxConcurrentInput(e.target.value)}
+              placeholder={apiKey.effectiveMaxConcurrent != null ? String(apiKey.effectiveMaxConcurrent) : t('keys.capUnlimitedPlaceholder')}
+              className="font-mono text-xs"
+              aria-invalid={attempted && !maxConcurrentValid}
+            />
+            <p className="text-[11px] text-muted-foreground">{t('keys.keyConcurrencyHint')}</p>
+          </div>
 
           {updateKey.isError && (
             <p className="text-xs text-destructive">{(updateKey.error as Error).message}</p>

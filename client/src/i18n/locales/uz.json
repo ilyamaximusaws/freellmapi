@@ -734,6 +734,8 @@
     "noModelsForProvider": "Ushbu taʼminotchi uchun modellar sozlanmagan.",
     "testModels": "Modellarni sinab ko‘rish",
     "monthlyRequestCapLabel": "Oylik so‘rov chegarasi",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Oylik token chegarasi",
     "capUnlimitedPlaceholder": "Cheksiz",
     "capEditHint": "Chegaralar har oyning 1-sana 00:00 UTC da tiklanadi. Cheksiz uchun bo‘sh qoldiring.",

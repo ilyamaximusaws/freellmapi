@@ -43,6 +43,11 @@ import {
   rescueInlineToolCalls,
   startsWithDialectMarker,
 } from './tool-call-rescue.js';
+import { slotWaitRouter } from './concurrency-slot-wait.js';
+
+// [fork 2/10] Routing call that waits briefly for a per-key concurrency slot
+// instead of failing when every candidate key is saturated.
+const routeWithSlotWait = slotWaitRouter(routeRequest);
 import { sanitizeProviderErrorMessage } from './error-redaction.js';
 import { newClientAbortError, isUpstreamClassificationOutput } from './error-classify.js';
 import { logRequest } from './request-log.js';
@@ -232,13 +237,13 @@ export async function runInboundChat(
     attemptLog,
     logIdentity: { surface: 'inbound chat', requestedModel: input.model ?? 'auto' },
     clientGone: () => clientGone,
-    route: () => {
+    route: async () => {
       // #507: after the first 413 / context-length rejection the parser
       // latches the provider-reported REQUESTED size onto state. Inflate the
       // routing estimate on the next attempt so low-tpm / small-window models
       // are skipped by the existing gates in router.ts instead of re-firing.
       const routingTotal = fallbackRoutingTokens(state, estimatedTotal, outputReserve);
-      return routeRequest(
+      return routeWithSlotWait(
         routingTotal,
         state.skipKeys.size ? state.skipKeys : undefined,
         pin.preferredModel,

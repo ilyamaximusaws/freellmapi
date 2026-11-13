@@ -417,6 +417,10 @@ export interface ApiKey {
   monthlyRequestCap?: number;
   /** Per-key monthly token cap (0 = unlimited, #1158). */
   monthlyTokenCap?: number;
+  /** Per-key in-flight cap ([fork 2/10]): null = inherit, 0 = unlimited. */
+  maxConcurrent?: number | null;
+  /** The cap actually enforced after key → platform → global → setting. */
+  effectiveMaxConcurrent?: number | null;
   /** Current UTC month's successful usage against the caps above, with the
    *  ISO time of the next monthly reset. */
   monthlyUsage?: { requests: number; tokens: number; resetsAt: string };

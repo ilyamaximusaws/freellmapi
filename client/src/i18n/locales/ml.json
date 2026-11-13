@@ -734,6 +734,8 @@
     "noModelsForProvider": "ഈ ദാതാവിനായി മോഡലുകളൊന്നും കോൺഫിഗർ ചെയ്തിട്ടില്ല.",
     "testModels": "മോഡലുകൾ പരീക്ഷിക്കുക",
     "monthlyRequestCapLabel": "മാസിക അഭ്യർത്ഥന പരിധി",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "മാസിക ടോക്കൺ പരിധി",
     "capUnlimitedPlaceholder": "പരിധിയില്ല",
     "capEditHint": "പരിധികൾ ഓരോ മാസവും 1-ന് 00:00 UTC-ന് റീസെറ്റ് ചെയ്യും. പരിധിയില്ലാതെ വെച്ചാൽ മതി.",

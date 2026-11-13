@@ -734,6 +734,8 @@
     "noModelsForProvider": "اس فراہم کنندہ کے لیے کوئی ماڈل ترتیب نہیں دیا گیا ہے۔",
     "testModels": "ماڈلز کی جانچ کریں",
     "monthlyRequestCapLabel": "ماہانہ درخواستوں کی حد",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "ماہانہ ٹوکن کی حد",
     "capUnlimitedPlaceholder": "لامحدود",
     "capEditHint": "حدیں ہر مہینے کی 1 تاریخ کو 00:00 UTC پر ری سیٹ ہوتی ہیں۔ لامحدود کے لیے خالی چھوڑیں۔",

@@ -734,6 +734,8 @@
     "noModelsForProvider": "Walang naka-configure na modelo para sa provider na ito.",
     "testModels": "Subukan ang mga modelo",
     "monthlyRequestCapLabel": "Buwanang limit ng kahilingan",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Buwanang limit ng token",
     "capUnlimitedPlaceholder": "Walang limit",
     "capEditHint": "Nireset ang limit sa ika-1 ng buwan, 00:00 UTC. Iwanang blangko kung walang limit.",

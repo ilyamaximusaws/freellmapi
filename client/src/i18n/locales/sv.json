@@ -734,6 +734,8 @@
     "noModelsForProvider": "Inga modeller konfigurerade för denna leverantör.",
     "testModels": "Testa modeller",
     "monthlyRequestCapLabel": "Månadslimit för förfrågningar",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Månadslimit för tokens",
     "capUnlimitedPlaceholder": "Obegränsat",
     "capEditHint": "Gränserna nollställs den 1:a kl 00:00 UTC. Lämna tomt för obegränsat.",

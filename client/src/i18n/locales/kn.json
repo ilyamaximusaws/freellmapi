@@ -734,6 +734,8 @@
     "noModelsForProvider": "ಈ ಒದಗಿಸುವವರಿಗಾಗಿ ಯಾವುದೇ ಮಾದರಿಗಳನ್ನು ಕಾನ್ಫಿಗರ್ ಮಾಡಲಾಗಿಲ್ಲ.",
     "testModels": "ಮಾದರಿಗಳನ್ನು ಪರೀಕ್ಷಿಸಿ",
     "monthlyRequestCapLabel": "ಮಾಸಿಕ ವಿನಂತಿ ಮಿತಿ",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "ಮಾಸಿಕ ಟೋಕನ್ ಮಿತಿ",
     "capUnlimitedPlaceholder": "ಅಪರಿಮಿತ",
     "capEditHint": "ಮಿತಿಗಳು ಪ್ರತಿ ತಿಂಗಳು 1 ರಂದು 00:00 UTC ನಲ್ಲಿ ಮರುಹೊಂದಿಸುತ್ತವೆ. ಅಪರಿಮಿತಕ್ಕೆ ಖಾಲಿ ಬಿಡಿ.",

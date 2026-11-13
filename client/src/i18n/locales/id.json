@@ -734,6 +734,8 @@
     "noModelsForProvider": "Tidak ada model yang dikonfigurasi untuk penyedia ini.",
     "testModels": "Uji model",
     "monthlyRequestCapLabel": "Batas permintaan bulanan",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Batas token bulanan",
     "capUnlimitedPlaceholder": "Tanpa batas",
     "capEditHint": "Batas disetel ulang pada tanggal 1 pukul 00:00 UTC. Kosongkan untuk tanpa batas.",

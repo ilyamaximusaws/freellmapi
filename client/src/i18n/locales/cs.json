@@ -734,6 +734,8 @@
     "noModelsForProvider": "Pro tohoto poskytovatele nejsou nakonfigurovány žádné modely.",
     "testModels": "Otestovat modely",
     "monthlyRequestCapLabel": "Měsíční limit požadavků",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Měsíční limit tokenů",
     "capUnlimitedPlaceholder": "Neomezeno",
     "capEditHint": "Limity se resetují 1. dne v 00:00 UTC. Nechte prázdné pro neomezeno.",

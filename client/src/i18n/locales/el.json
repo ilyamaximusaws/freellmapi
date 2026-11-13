@@ -734,6 +734,8 @@
     "noModelsForProvider": "Δεν έχουν διαμορφωθεί μοντέλα για αυτόν τον πάροχο.",
     "testModels": "Δοκιμή μοντέλων",
     "monthlyRequestCapLabel": "Μηνιαίο όριο αιτημάτων",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Μηνιαίο όριο tokens",
     "capUnlimitedPlaceholder": "Απεριόριστο",
     "capEditHint": "Τα όρια μηδενίζονται την 1η στις 00:00 UTC. Αφήστε κενό για απεριόριστο.",

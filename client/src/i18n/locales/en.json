@@ -741,6 +741,8 @@
     "noModelsForProvider": "No models configured for this provider.",
     "testModels": "Test models",
     "monthlyRequestCapLabel": "Monthly request cap",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Monthly token cap",
     "capUnlimitedPlaceholder": "Unlimited",
     "capEditHint": "Caps reset on the 1st, 00:00 UTC. Leave blank for unlimited.",

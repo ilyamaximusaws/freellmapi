@@ -734,6 +734,8 @@
     "noModelsForProvider": "此提供商尚未設定任何模型。",
     "testModels": "測試模型",
     "monthlyRequestCapLabel": "每月請求上限",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "每月 Token 上限",
     "capUnlimitedPlaceholder": "無限制",
     "capEditHint": "配額在每月 1 日 00:00 UTC 重設。留空表示無限制。",

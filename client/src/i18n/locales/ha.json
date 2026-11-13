@@ -734,6 +734,8 @@
     "noModelsForProvider": "Babu samfuran da aka saita don wannan mai ba da sabis.",
     "testModels": "Gwada samfura",
     "monthlyRequestCapLabel": "Iyakar buƙatota ta wata",
+    "keyConcurrencyLabel": "Max concurrent requests",
+    "keyConcurrencyHint": "How many requests may run at once on this key. Empty = inherit the platform/global cap, 0 = unlimited.",
     "monthlyTokenCapLabel": "Iyakar token ta wata",
     "capUnlimitedPlaceholder": "Ba iyaka ba",
     "capEditHint": "Ana saita iyakoki a ranar 1 00:00 UTC. Bara komai don mara iyaka.",

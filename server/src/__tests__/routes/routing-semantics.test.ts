@@ -11,6 +11,11 @@ import {
   setKeySelectionStrategy,
 } from '../../services/router.js';
 import { recordQuotaObservation } from '../../services/provider-quota.js';
+// In-flight leases are process-local (services/ratelimit.ts); the DB is rebuilt
+// for every test but those maps are not, and with the per-key concurrency cap
+// now defaulting to 3 ([fork 2/10]) stale leases from an earlier test would
+// otherwise skip a freshly-created key.
+import { resetLeases } from '../../services/ratelimit.js';
 import { mintDashboardToken, isGatedApiPath } from '../helpers/auth.js';
 
 let app: Express;
@@ -110,6 +115,7 @@ beforeEach(() => {
   dashToken = mintDashboardToken();
   setRoutingStrategy('priority');
   getDb().prepare('DELETE FROM api_keys').run();
+  resetLeases();
 });
 
 describe('routing semantics', () => {
