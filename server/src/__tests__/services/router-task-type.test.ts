@@ -67,6 +67,7 @@ function pickCounts(runs: number, task?: 'code' | 'chat'): Record<string, number
   for (let i = 0; i < runs; i++) {
     const r = routeRequest(100, undefined, undefined, false, false, undefined, undefined, false, undefined, 0, task);
     counts[r.modelId] = (counts[r.modelId] ?? 0) + 1;
+    r.release?.();
   }
   return counts;
 }

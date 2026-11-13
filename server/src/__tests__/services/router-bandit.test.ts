@@ -76,6 +76,9 @@ function pickCounts(runs: number): Record<string, number> {
   for (let i = 0; i < runs; i++) {
     const r = routeRequest(100);
     counts[r.modelId] = (counts[r.modelId] ?? 0) + 1;
+    // Each simulated pick is a completed request: release the in-flight slot
+    // the router reserves for the chosen key ([fork 2/10]).
+    r.release?.();
   }
   return counts;
 }
@@ -157,6 +160,7 @@ describe('bandit router', () => {
     for (let i = 0; i < 2000; i++) {
       const r = routeRequest(100, undefined, undefined, /*requireVision=*/ true);
       counts[r.modelId] = (counts[r.modelId] ?? 0) + 1;
+      r.release?.();
     }
     // The loop gate already guarantees this half; the pool filter is what the
     // vision-c bound below actually pins down.
@@ -518,7 +522,12 @@ describe('tool-rejecting models are deferred for tool requests (#1230)', () => {
     addModel({ platform: 'groq', modelId: 'second', name: 'Second', intelligenceRank: 2, sizeLabel: 'Large', budget: '~1M', priority: 2 });
     return first;
   };
-  const route = (requireTools: boolean, preferred?: number) => routeRequest(100, undefined, preferred, false, requireTools).modelId;
+  const route = (requireTools: boolean, preferred?: number) => {
+    const r = routeRequest(100, undefined, preferred, false, requireTools);
+    // This helper is a one-shot simulation, not a dispatch: release the slot.
+    r.release?.();
+    return r.modelId;
+  };
 
   it('keeps the operator order until a model is benched', () => {
     seed();

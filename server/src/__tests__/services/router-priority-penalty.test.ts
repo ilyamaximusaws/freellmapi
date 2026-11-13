@@ -51,6 +51,14 @@ function addModel(opts: { platform: string; modelId: string; priority: number })
   return id;
 }
 
+// One-shot pick: the router reserves an in-flight slot for the chosen key
+// ([fork 2/10]), and a test that only inspects the pick must release it.
+function pickModel(): string {
+  const r = routeRequest(100);
+  r.release?.();
+  return r.modelId;
+}
+
 describe('priority-mode routing penalty under spaced priorities', () => {
   beforeEach(() => {
     process.env.DEV_MODE = 'true';
@@ -79,11 +87,11 @@ describe('priority-mode routing penalty under spaced priorities', () => {
     addModel({ platform: 'cerebras', modelId: 'c', priority: 30 });
     refreshStatsCache(getDb(), true);
 
-    expect(routeRequest(100).modelId).toBe('a');
+    expect(pickModel()).toBe('a');
 
     // One 429 costs PENALTY_PER_429 = 3 positions: rank 1 + 3 = 4, behind b's 2.
     penalize(a, 1);
-    expect(routeRequest(100).modelId).toBe('b');
+    expect(pickModel()).toBe('b');
   });
 
   it('demotes a penalized model when the enabled subset leaves holes in the sequence', () => {
@@ -93,9 +101,9 @@ describe('priority-mode routing penalty under spaced priorities', () => {
     addModel({ platform: 'groq', modelId: 'b', priority: 87 });
     refreshStatsCache(getDb(), true);
 
-    expect(routeRequest(100).modelId).toBe('a');
+    expect(pickModel()).toBe('a');
     penalize(a, 1);
-    expect(routeRequest(100).modelId).toBe('b');
+    expect(pickModel()).toBe('b');
   });
 
   it('leaves an unpenalized chain in exactly the order the user arranged', () => {
@@ -104,7 +112,7 @@ describe('priority-mode routing penalty under spaced priorities', () => {
     addModel({ platform: 'cerebras', modelId: 'c', priority: 20 });
     refreshStatsCache(getDb(), true);
 
-    expect(routeRequest(100).modelId).toBe('b');
+    expect(pickModel()).toBe('b');
   });
 
   it('keeps a dense chain behaving exactly as before', () => {
@@ -112,9 +120,9 @@ describe('priority-mode routing penalty under spaced priorities', () => {
     addModel({ platform: 'groq', modelId: 'b', priority: 2 });
     refreshStatsCache(getDb(), true);
 
-    expect(routeRequest(100).modelId).toBe('a');
+    expect(pickModel()).toBe('a');
     penalize(a, 1);
-    expect(routeRequest(100).modelId).toBe('b');
+    expect(pickModel()).toBe('b');
   });
 
   it('does not demote past a model penalized even harder', () => {
@@ -126,6 +134,6 @@ describe('priority-mode routing penalty under spaced priorities', () => {
     penalize(a, 1);  // rank 1 + 3 = 4
     penalize(b, 3);  // rank 2 + 9 = 11
     // c is unpenalized at rank 3 — the cheapest of the three.
-    expect(routeRequest(100).modelId).toBe('c');
+    expect(pickModel()).toBe('c');
   });
 });

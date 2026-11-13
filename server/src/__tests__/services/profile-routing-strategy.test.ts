@@ -138,9 +138,13 @@ describe('per-chain routing strategy', () => {
     addToChain(chain.id, firstId, 1);
     addToChain(chain.id, brightId, 2);
 
-    const route = (): number =>
-      routeRequest(1000, undefined, undefined, false, false, undefined,
-        resolveRoutingChain('auto:ranked').chain).modelDbId;
+    const route = (): number => {
+      const r = routeRequest(1000, undefined, undefined, false, false, undefined,
+        resolveRoutingChain('auto:ranked').chain);
+      // One-shot simulation: release the slot reserved for the picked key.
+      r.release?.();
+      return r.modelDbId;
+    };
 
     const setChain = (preset: string | null) =>
       getDb().prepare('UPDATE profiles SET routing_strategy = ? WHERE id = ?').run(preset, chain.id);
@@ -177,9 +181,12 @@ describe('per-chain routing strategy', () => {
     // the chain's own preset: the chain says manual order, the request says
     // smartest, and the smart model must win.
     setChain('priority');
-    const overridden = (): number =>
-      routeRequest(1000, undefined, undefined, false, false, undefined,
-        resolveRoutingChain('auto:ranked').chain, false, undefined, 0, undefined, 'smartest').modelDbId;
+    const overridden = (): number => {
+      const r = routeRequest(1000, undefined, undefined, false, false, undefined,
+        resolveRoutingChain('auto:ranked').chain, false, undefined, 0, undefined, 'smartest');
+      r.release?.();
+      return r.modelDbId;
+    };
     const counts = new Map<number, number>();
     for (let i = 0; i < 25; i++) { const id = overridden(); counts.set(id, (counts.get(id) ?? 0) + 1); }
     expect([...counts.entries()].sort((a, b) => b[1] - a[1])[0][0]).toBe(brightId);
