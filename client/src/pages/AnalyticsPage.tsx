@@ -25,6 +25,7 @@ import {
   Network,
   Server,
   TriangleAlert,
+  Users,
   Zap,
   X,
   type LucideIcon,
@@ -200,6 +201,31 @@ interface ByClientRow {
   totalInputTokens: number
   totalOutputTokens: number
   lastSeenAt: string | null
+}
+
+// [fork 1/10] Traffic grouped by the AUTHENTICATED downstream client (the
+// client_profiles token), not by User-Agent like ByClientRow above.
+interface ByDownstreamClientRow {
+  clientId: number | null
+  clientName: string
+  requests: number
+  successRate: number
+  avgLatencyMs: number
+  totalInputTokens: number
+  totalOutputTokens: number
+  lastSeenAt: string | null
+}
+
+// [fork 2/10] Live per-key concurrency: slots in use vs the enforced cap, and
+// how often requests had to queue for a slot on that key.
+interface KeyConcurrencyRow {
+  platform: string
+  keyId: number
+  inFlight: number
+  limit: number | null
+  queueWaits: number
+  queueWaitMsAvg: number
+  queueWaitMsMax: number
 }
 
 interface TimelineBucket {
@@ -601,6 +627,18 @@ export default function AnalyticsPage() {
   // timeline hours/days on the viewer's wall clock instead of UTC.
   const tzOffset = -new Date().getTimezoneOffset()
 
+  const { data: byDownstreamClient = [] } = useQuery({
+    queryKey: ['analytics-by-downstream-client', range],
+    queryFn: () => apiFetch<ByDownstreamClientRow[]>(`/api/analytics/by-downstream-client?range=${range}`),
+  })
+
+  // Live state, not a range query: refresh on its own so occupied slots move.
+  const { data: keyConcurrency = [] } = useQuery({
+    queryKey: ['analytics-key-concurrency'],
+    queryFn: () => apiFetch<KeyConcurrencyRow[]>('/api/analytics/key-concurrency'),
+    refetchInterval: 10000,
+  })
+
   const { data: timeline = [] } = useQuery({
     queryKey: ['analytics', 'timeline', range, tzOffset],
     queryFn: () => apiFetch<TimelineBucket[]>(`/api/analytics/timeline?range=${range}&tzOffset=${tzOffset}`),
@@ -906,6 +944,76 @@ export default function AnalyticsPage() {
                   <Bar dataKey="requests" name={t('analytics.requests')} fill={seriesB} radius={[3, 3, 0, 0]} maxBarSize={24} />
                 </BarChart>
               </ResponsiveContainer>
+            )}
+          </Panel>
+
+          {/* [fork 1/10] Which authenticated client (per-agent token) used what. */}
+          <Panel icon={Users} title={t('analytics.byDownstreamClient')}>
+            {byDownstreamClient.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">{t('common.noData')}</p>
+            ) : (
+              <div className="space-y-1.5">
+                <div className="grid grid-cols-[1fr_auto_auto_auto] gap-3 text-[11px] text-muted-foreground">
+                  <span>{t('analytics.client')}</span>
+                  <span className="text-right">{t('analytics.requests')}</span>
+                  <span className="text-right">{t('analytics.successRateShort')}</span>
+                  <span className="text-right">{t('analytics.tokens')}</span>
+                </div>
+                {byDownstreamClient.map(row => (
+                  <div
+                    key={row.clientId ?? 'default'}
+                    className="grid grid-cols-[1fr_auto_auto_auto] items-baseline gap-3 border-t pt-1.5 text-xs"
+                  >
+                    <span className="truncate" title={row.clientName}>
+                      {row.clientName}
+                      {row.clientId == null && (
+                        <span className="ml-1.5 text-[11px] text-muted-foreground">({t('analytics.unifiedKey')})</span>
+                      )}
+                    </span>
+                    <span className="text-right tabular-nums">{row.requests.toLocaleString()}</span>
+                    <span className={`text-right tabular-nums ${row.successRate < 95 ? 'text-amber-500' : 'text-muted-foreground'}`}>
+                      {row.successRate}%
+                    </span>
+                    <span className="text-right tabular-nums text-muted-foreground">
+                      {formatTokens(row.totalInputTokens)} / {formatTokens(row.totalOutputTokens)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+
+          {/* [fork 2/10] Live per-key slots; only keys with requests in flight appear. */}
+          <Panel icon={Activity} title={t('analytics.keyConcurrency')}>
+            {keyConcurrency.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">{t('analytics.keyConcurrencyIdle')}</p>
+            ) : (
+              <div className="space-y-1.5">
+                <div className="grid grid-cols-[1fr_auto_auto] gap-3 text-[11px] text-muted-foreground">
+                  <span>{t('analytics.key')}</span>
+                  <span className="text-right">{t('analytics.slots')}</span>
+                  <span className="text-right">{t('analytics.queueWait')}</span>
+                </div>
+                {keyConcurrency.map(row => (
+                  <div
+                    key={`${row.platform}:${row.keyId}`}
+                    className="grid grid-cols-[1fr_auto_auto] items-baseline gap-3 border-t pt-1.5 text-xs"
+                  >
+                    <span className="truncate">
+                      <PlatformDot platform={row.platform} />
+                      <span className="ml-1.5 text-muted-foreground">#{row.keyId}</span>
+                    </span>
+                    <span className="text-right tabular-nums">
+                      {row.inFlight}/{row.limit ?? '∞'}
+                    </span>
+                    <span className="text-right tabular-nums text-muted-foreground">
+                      {row.queueWaits === 0
+                        ? '—'
+                        : `${row.queueWaits}× · ${formatMs(row.queueWaitMsAvg)}`}
+                    </span>
+                  </div>
+                ))}
+              </div>
             )}
           </Panel>
 
