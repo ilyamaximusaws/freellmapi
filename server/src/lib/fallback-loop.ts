@@ -20,6 +20,8 @@ import { benchCloudflareAccount } from '../services/cloudflare-daily-quota.js';
 import type { RouteResult } from '../services/router.js';
 import { recordRateLimitHit, recordModelFailure, recordSuccess, hasOtherUsableKey, routableKeyIdsForModel, formatResetEta, isProviderMomentAttributionEnabled } from '../services/router.js';
 import { detectAction, noteKeySuccess } from '../services/action-needed.js';
+import { recordKeyHeaders, retryAfterCooldown } from '../services/key-limits.js';
+import { runWithRateLimitCapture, takeCapturedRateLimitHeaders } from './rate-limit-headers.js';
 import { safeHeaderValue } from './header-value.js';
 import {
   recordRequest,
@@ -583,6 +585,10 @@ export function recordRetryableFailure(route: RouteResult, err: any, state: Fall
   const errStatus = Number(err?.status);
   if (Number.isFinite(errStatus)) {
     detectAction(route.keyId, errStatus, String(err?.message ?? ''));
+    // [fork 7/10] A 429 with a Retry-After is the provider promising the reset
+    // time for THIS key (not just this model), so also hold the key with that
+    // reason visible in the dashboard.
+    if (errStatus === 429) retryAfterCooldown(route.keyId, err?.retryAfterMs);
   }
   // Workers AI's daily neurons pool is per ACCOUNT: bench every model on every
   // token of the same account with this route's own duration and provenance.
@@ -1603,7 +1609,12 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
       // otherwise the global proxy / direct path applies as before. The URL
       // arrives already decrypted on the route (services/router.ts), so an
       // attempt costs nothing extra — no query, no decrypt.
-      outcome = await withKeyProxy(route.proxyUrl, () => hooks.dispatch(route, attempt, { disarmHedge }));
+      outcome = await runWithRateLimitCapture(() =>
+        withKeyProxy(route.proxyUrl, () => hooks.dispatch(route, attempt, { disarmHedge })));
+      // [fork 7/10] Snapshot whatever the provider reported in this attempt's
+      // headers (remaining/reset), keyed to the right key.
+      const captured = takeCapturedRateLimitHeaders();
+      if (captured) recordKeyHeaders(route.keyId, captured);
     } catch (err: any) {
       // Client-caused abort: the composed fetch signal fired because OUR
       // client hung up mid-attempt (see newClientAbortError). Not a

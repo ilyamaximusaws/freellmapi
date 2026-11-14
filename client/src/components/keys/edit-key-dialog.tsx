@@ -14,6 +14,7 @@ import { PLATFORMS } from './shared'
 import { GroupLabelField } from './group-label-field'
 import { capUsage } from './cap-usage'
 import { KeyCapsSection } from './key-caps-section'
+import { KeyCooldownSection } from './key-cooldown-section'
 
 type UpdateBody = {
   label?: string
@@ -25,6 +26,10 @@ type UpdateBody = {
   // Rotation share and group ([fork 6/10]).
   weight?: number
   order?: number
+  // Per-key rate caps ([fork 7/10]): 0 = unlimited.
+  rpm?: number
+  tpm?: number
+  rpd?: number
   groupLabel?: string
   proxyUrl?: string
 }
@@ -111,6 +116,10 @@ export function EditKeyDialog({
   // Rotation weight/order ([fork 6/10]): '' means "leave unchanged".
   const [weight, setWeight] = useState(String(apiKey.weight ?? 1))
   const [order, setOrder] = useState(String(apiKey.order ?? 0))
+  // Per-key rate caps ([fork 7/10]): blank = unlimited.
+  const [rpm, setRpm] = useState(apiKey.rpm ? String(apiKey.rpm) : '')
+  const [tpm, setTpm] = useState(apiKey.tpm ? String(apiKey.tpm) : '')
+  const [rpd, setRpd] = useState(apiKey.rpd ? String(apiKey.rpd) : '')
   // Per-key concurrency cap ([fork 2/10]): blank = inherit the provider/global
   // cap, 0 = unlimited, N = at most N requests in flight on this credential.
   const [maxConcurrentInput, setMaxConcurrentInput] = useState(
@@ -157,7 +166,19 @@ export function EditKeyDialog({
   const orderValid = /^-?\d+$/.test(orderTrimmed)
   const weightChanged = weightValid && Number(weightTrimmed) !== (apiKey.weight ?? 1)
   const orderChanged = orderValid && Number(orderTrimmed) !== (apiKey.order ?? 0)
-  const hasChanges = label !== apiKey.label || Boolean(credential) || requestCapChanged || tokenCapChanged || groupLabelChanged || proxyChanged || maxConcurrentChanged || weightChanged || orderChanged
+  // Per-key rate caps ([fork 7/10]): all three are non-negative integers; blank
+  // means unlimited. Parse consistently with the server's 0-clears semantics.
+  const rpmTrimmed = rpm.trim()
+  const tpmTrimmed = tpm.trim()
+  const rpdTrimmed = rpd.trim()
+  const rpmValue = rpmTrimmed === '' ? 0 : Number(rpmTrimmed)
+  const tpmValue = tpmTrimmed === '' ? 0 : Number(tpmTrimmed)
+  const rpdValue = rpdTrimmed === '' ? 0 : Number(rpdTrimmed)
+  const rateValid = /^\d*$/.test(rpmTrimmed) && /^\d*$/.test(tpmTrimmed) && /^\d*$/.test(rpdTrimmed)
+  const rpmChanged = rpmValue !== (apiKey.rpm ?? 0)
+  const tpmChanged = tpmValue !== (apiKey.tpm ?? 0)
+  const rpdChanged = rpdValue !== (apiKey.rpd ?? 0)
+  const hasChanges = label !== apiKey.label || Boolean(credential) || requestCapChanged || tokenCapChanged || groupLabelChanged || proxyChanged || maxConcurrentChanged || weightChanged || orderChanged || rpmChanged || tpmChanged || rpdChanged
 
   const updateKey = useMutation({
     mutationFn: (body: UpdateBody) =>
@@ -171,7 +192,7 @@ export function EditKeyDialog({
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (credentialError || capError || !maxConcurrentValid || !weightValid || !orderValid) {
+    if (credentialError || capError || !maxConcurrentValid || !weightValid || !orderValid || !rateValid) {
       setAttempted(true)
       return
     }
@@ -184,6 +205,9 @@ export function EditKeyDialog({
     if (maxConcurrentChanged && maxConcurrentValid) body.maxConcurrent = maxConcurrentValue
     if (weightChanged) body.weight = Number(weightTrimmed)
     if (orderChanged) body.order = Number(orderTrimmed)
+    if (rpmChanged) body.rpm = rpmValue
+    if (tpmChanged) body.tpm = tpmValue
+    if (rpdChanged) body.rpd = rpdValue
     if (groupLabelChanged) body.groupLabel = groupLabel.trim()
     // '' clears the override; a typed URL replaces it (and wins over Remove).
     if (proxyChanged) body.proxyUrl = proxyUrl.trim()
@@ -356,6 +380,8 @@ export function EditKeyDialog({
               per-model scope, and an account tag for a shared budget. */}
           <KeyCapsSection apiKey={apiKey} />
 
+          <KeyCooldownSection apiKey={apiKey} />
+
           {/* Per-key concurrency ([fork 2/10]): how many requests may be in
               flight against this credential at once. */}
           <div className="space-y-1.5">
@@ -400,6 +426,35 @@ export function EditKeyDialog({
             </div>
           </div>
           <p className="text-[11px] text-muted-foreground">{t('keys.rotationHint')}</p>
+
+          {/* Per-key rate caps ([fork 7/10]): the key's own rpm/tpm/rpd, counted
+              on a sliding window and checked before the request. Blank = unlimited. */}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs" htmlFor="edit-key-rpm">{t('keys.rpmLabel')}</Label>
+              <Input id="edit-key-rpm" inputMode="numeric" value={rpm} onChange={e => setRpm(e.target.value)}
+                placeholder={t('keys.capUnlimitedPlaceholder')} aria-invalid={attempted && !rateValid} className="font-mono text-xs" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs" htmlFor="edit-key-tpm">{t('keys.tpmLabel')}</Label>
+              <Input id="edit-key-tpm" inputMode="numeric" value={tpm} onChange={e => setTpm(e.target.value)}
+                placeholder={t('keys.capUnlimitedPlaceholder')} aria-invalid={attempted && !rateValid} className="font-mono text-xs" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs" htmlFor="edit-key-rpd">{t('keys.rpdLabel')}</Label>
+              <Input id="edit-key-rpd" inputMode="numeric" value={rpd} onChange={e => setRpd(e.target.value)}
+                placeholder={t('keys.capUnlimitedPlaceholder')} aria-invalid={attempted && !rateValid} className="font-mono text-xs" />
+            </div>
+          </div>
+          <p className="text-[11px] text-muted-foreground">{t('keys.rateHint')}</p>
+          {apiKey.rate && (apiKey.rate.provider?.requestsRemaining != null || apiKey.rate.provider?.tokensRemaining != null) && (
+            <p className="text-[11px] text-amber-600 dark:text-amber-500">
+              {t('keys.providerRateLine', {
+                requests: apiKey.rate.provider.requestsRemaining ?? '?',
+                tokens: apiKey.rate.provider.tokensRemaining ?? '?',
+              })}
+            </p>
+          )}
 
           {updateKey.isError && (
             <p className="text-xs text-destructive">{(updateKey.error as Error).message}</p>

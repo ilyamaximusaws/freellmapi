@@ -33,6 +33,7 @@ import { checkMonthlyBudget, reserveMonthlyBudget } from './key-budget.js';
 import { checkKeyCaps, reserveKeyCaps, isCapSoftPressured } from './key-caps.js';
 import { excludedKeyIds } from './action-needed.js';
 import { usesWeighting, orderKeysByWeight, effectiveKeyWeight } from './key-weight.js';
+import { checkKeyRateLimits } from './key-limits.js';
 import { cloudflareNeuronsAvailable } from './cloudflare-neurons.js';
 import { applyModelWeightOverride, getModelWeightOverrides } from './model-weight-overrides.js';
 import { modelsWithOverriddenField, getCatalogModelTombstone } from './model-state.js';
@@ -1740,6 +1741,14 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
     // parallel streams all pick the same key and 429 each other on providers that
     // meter concurrency per credential.
     if (!canUseKeyConcurrency(entry.platform, key.id, Date.now(), key.max_concurrent ?? null)) { note('key-concurrency'); continue; }
+    // [fork 7/10] The key's own sliding-window caps (rpm/tpm/rpd), a fresh
+    // provider-reported exhaustion, or a manual/Retry-After cooldown all stop
+    // the key BEFORE the request — the 429 we would otherwise eat becomes a
+    // skip to a sibling key while there is still one.
+    {
+      const keyLimit = checkKeyRateLimits(key.id);
+      if (!keyLimit.allowed) { note(keyLimit.reason); continue; }
+    }
     if (!canMakeRequest(entry.platform, entry.model_id, key.id, limits)) { note('rpm/rpd-limit'); continue; }
     if (!canUseTokens(entry.platform, entry.model_id, key.id, estimatedTokens, limits)) { note('tpm/tpd-limit'); continue; }
     if (!canUseProviderTokens(entry.platform, key.id, entry.model_id, estimatedTokens)) { note('provider-daily-token-cap'); continue; }

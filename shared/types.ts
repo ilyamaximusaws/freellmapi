@@ -383,6 +383,32 @@ export interface ApiKeyCooldown {
   remainingMs: number;
 }
 
+/** [fork 7/10] The key's caps with live usage and the provider's last word. */
+export interface KeyRateSummary {
+  limits: { rpm: number | null; tpm: number | null; rpd: number | null };
+  usage: { minute: { requests: number; tokens: number }; day: { requests: number; tokens: number } };
+  provider: {
+    requestsRemaining: number | null;
+    requestsLimit: number | null;
+    requestsResetMs: number | null;
+    tokensRemaining: number | null;
+    tokensLimit: number | null;
+    tokensResetMs: number | null;
+    observedAtMs: number | null;
+    fresh: boolean;
+  } | null;
+}
+
+/** [fork 7/10] A key-wide hold (manual or Retry-After) with its reason. */
+export interface KeyCooldownInfo {
+  keyId: number;
+  reason: string;
+  note: string | null;
+  source: 'manual' | 'retry_after';
+  expiresAtMs: number;
+  createdAt: string;
+}
+
 /** [fork 5/10] A key whose credential works but which needs a manual step on
  *  the provider's site before it can serve. */
 export interface KeyActionNeeded {
@@ -463,6 +489,17 @@ export interface ApiKey {
   /** [fork 6/10] Rotation group (default 0). Keys of a lower group are tried
    *  first; a higher group only sees traffic when the lower ones are unusable. */
   order?: number;
+  /** [fork 7/10] Per-key requests-per-minute cap (null/0 = unlimited). */
+  rpm?: number | null;
+  /** [fork 7/10] Per-key tokens-per-minute cap (null/0 = unlimited). */
+  tpm?: number | null;
+  /** [fork 7/10] Per-key requests-per-day cap (null/0 = unlimited). */
+  rpd?: number | null;
+  /** [fork 7/10] Live usage against the caps + the provider's last reported
+   *  remaining/reset, for the "12 of 50 remaining" line on the card. */
+  rate?: KeyRateSummary;
+  /** [fork 7/10] Active key-wide cooldown (manual park or Retry-After 429). */
+  keyCooldown?: KeyCooldownInfo | null;
   /** The cap actually enforced after key → platform → global → setting. */
   effectiveMaxConcurrent?: number | null;
   /** Current UTC month's successful usage against the caps above, with the

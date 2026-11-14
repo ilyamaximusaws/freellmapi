@@ -9,6 +9,7 @@ import type {
 import type { QuotaObservationContext } from '../services/provider-quota.js';
 import type { ExtendedSamplingOptions } from '../lib/sampling-params.js';
 import { proxyFetch } from '../lib/proxy.js';
+import { captureRateLimitHeaders } from '../lib/rate-limit-headers.js';
 import { providerTimeoutMs, streamStallTimeoutMs } from '../lib/provider-timeout.js';
 import { extractThinkTagsFromStream } from '../lib/think-tags.js';
 
@@ -409,7 +410,11 @@ export abstract class BaseProvider {
     try {
       // requestType='chat' + timeoutMs makes the AbortError message read
       // `<platform>, chat, 15s` for triage from the requests.error column.
-      return await proxyFetch(url, signal ? { ...init, signal } : init, this.platform, 'chat', timeoutMs);
+      const response = await proxyFetch(url, signal ? { ...init, signal } : init, this.platform, 'chat', timeoutMs);
+      // [fork 7/10] The provider's rate-limit headers ride on the attempt, so
+      // the failover bookkeeping can snapshot them per key right after.
+      captureRateLimitHeaders(response.headers);
+      return response;
     } finally {
       if (headerTimer !== undefined) clearTimeout(headerTimer);
     }

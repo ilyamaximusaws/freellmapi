@@ -23,6 +23,9 @@ import {
   listActionRules, createActionRule, updateActionRule, deleteActionRule,
   ACTION_REASONS, ACTION_POLICIES, RECURRENCE_KINDS, DEFAULT_SNOOZE_HOURS,
 } from '../services/action-needed.js';
+import {
+  keyRateSummary, setKeyCooldown, clearKeyCooldown, getKeyCooldown, listKeyCooldowns,
+} from '../services/key-limits.js';
 import { resolveCustomEndpointKey, customEndpointKeyIds, siblingEndpointKeyId, endpointHasCredential, normalizeGroupLabel, setCustomEndpointGroup } from '../services/custom-endpoint.js';
 import { registerCustomModels, registerCustomChatModels } from '../services/custom-model-register.js';
 import { registerCustomMediaModel } from '../services/custom-media-register.js';
@@ -178,8 +181,12 @@ const updateKeySchema = z.object({
   // Rotation group ([fork 6/10]): lower is tried first; a higher group is only
   // used when every key of the lower ones is unusable.
   order: z.number().int().min(-1_000_000).max(1_000_000).optional(),
-}).refine(data => data.enabled !== undefined || data.label !== undefined || data.modelScope !== undefined || data.proxyUrl !== undefined || data.key !== undefined || data.monthlyRequestCap !== undefined || data.monthlyTokenCap !== undefined || data.groupLabel !== undefined || data.maxConcurrent !== undefined || data.weight !== undefined || data.order !== undefined, {
-  message: 'At least one of enabled, label, modelScope, proxyUrl, key, monthlyRequestCap, monthlyTokenCap, groupLabel, maxConcurrent, weight or order must be provided',
+  // Per-key rate limits ([fork 7/10]): 0 = unlimited (cleared).
+  rpm: z.number().int().min(0).max(1_000_000_000).optional(),
+  tpm: z.number().int().min(0).max(1_000_000_000_000).optional(),
+  rpd: z.number().int().min(0).max(1_000_000_000).optional(),
+}).refine(data => data.enabled !== undefined || data.label !== undefined || data.modelScope !== undefined || data.proxyUrl !== undefined || data.key !== undefined || data.monthlyRequestCap !== undefined || data.monthlyTokenCap !== undefined || data.groupLabel !== undefined || data.maxConcurrent !== undefined || data.weight !== undefined || data.order !== undefined || data.rpm !== undefined || data.tpm !== undefined || data.rpd !== undefined, {
+  message: 'At least one field must be provided',
 });
 
 const importKeySchema = z.object({
@@ -498,6 +505,9 @@ keysRouter.get('/', (_req: Request, res: Response) => {
     // [fork 5/10] A key waiting on a human (verify phone, accept terms, daily
     // claim) says so on the row instead of looking like a generic auth failure.
     const action = getAction(Number(row.id));
+    // [fork 7/10] Key's own caps + live window usage + the provider's last word.
+    const rate = keyRateSummary(Number(row.id));
+    const keyCooldown = getKeyCooldown(Number(row.id));
     // Usage alongside the caps so the dashboard can show "342 of 1,000 this
     // month" instead of only the cap (OpenRouter's GET /api/v1/key returns
     // limit_remaining for the same reason).
@@ -514,6 +524,8 @@ keysRouter.get('/', (_req: Request, res: Response) => {
       monthlyRequestCap: budgetCaps.requestCap,
       accountKey: capSummary.accountKey,
       caps: capSummary.caps,
+      rate: rate,
+      keyCooldown,
       actionNeeded: action && !(action.snoozedUntilMs != null && action.snoozedUntilMs > Date.now())
         ? {
             id: action.id,
@@ -1972,7 +1984,7 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
     return;
   }
 
-  const { enabled, label, modelScope, proxyUrl, key, monthlyRequestCap, monthlyTokenCap, groupLabel, maxConcurrent, weight, order } = parsed.data;
+  const { enabled, label, modelScope, proxyUrl, key, monthlyRequestCap, monthlyTokenCap, groupLabel, maxConcurrent, weight, order, rpm, tpm, rpd } = parsed.data;
   const updates: string[] = [];
   const values: (string | number | null)[] = [];
   let changedKey: string | undefined;
@@ -2053,6 +2065,20 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
     updates.push('key_order = ?');
     values.push(order);
   }
+  // Per-key rate limits ([fork 7/10]): 0 clears the cap. Read on every routing
+  // decision, so a PATCH applies to the next request with no restart.
+  if (rpm !== undefined) {
+    updates.push('rpm_limit = ?');
+    values.push(rpm === 0 ? null : rpm);
+  }
+  if (tpm !== undefined) {
+    updates.push('tpm_limit = ?');
+    values.push(tpm === 0 ? null : tpm);
+  }
+  if (rpd !== undefined) {
+    updates.push('rpd_limit = ?');
+    values.push(rpd === 0 ? null : rpd);
+  }
   // Custom-endpoint group label (#1176) is written below, across the
   // endpoint's whole key pool rather than this one row.
   const db = getDb();
@@ -2103,6 +2129,63 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
   if (weight !== undefined) response.weight = weight;
   if (order !== undefined) response.order = order;
   res.json(response);
+});
+
+// ── Key-wide cooldowns and rate state [fork 7/10] ──────────────────────────
+// A manual cooldown (park a key with a reason) or the provider's last rate-limit
+// word, both readable from the key page so "idle key" is never unexplained.
+
+const manualCooldownSchema = z.object({
+  reason: z.string().trim().min(1).max(200),
+  note: z.string().trim().max(500).nullable().optional(),
+  /** Seconds, or `untilMs` for an absolute expiry. */
+  seconds: z.number().int().positive().max(30 * 86_400).optional(),
+  untilMs: z.number().int().positive().optional(),
+}).strict().refine(data => data.seconds !== undefined || data.untilMs !== undefined, {
+  message: 'Provide seconds or untilMs',
+});
+
+keysRouter.get('/cooldowns', (_req: Request, res: Response) => {
+  res.json({ cooldowns: listKeyCooldowns() });
+});
+
+keysRouter.post('/:id/cooldown', (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: { message: 'Invalid key id' } });
+    return;
+  }
+  const parsed = manualCooldownSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: { message: 'Invalid cooldown', issues: parsed.error.issues } });
+    return;
+  }
+  const exists = getDb().prepare('SELECT 1 FROM api_keys WHERE id = ?').get(id);
+  if (!exists) {
+    res.status(404).json({ error: { message: 'Key not found' } });
+    return;
+  }
+  const expiresAtMs = parsed.data.untilMs ?? Date.now() + (parsed.data.seconds ?? 0) * 1000;
+  const cooldown = setKeyCooldown(id, {
+    reason: parsed.data.reason,
+    note: parsed.data.note ?? null,
+    source: 'manual',
+    expiresAtMs,
+  });
+  res.status(201).json({ success: true, cooldown });
+});
+
+keysRouter.delete('/:id/cooldown', (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: { message: 'Invalid key id' } });
+    return;
+  }
+  if (!clearKeyCooldown(id)) {
+    res.status(404).json({ error: { message: 'No cooldown on this key' } });
+    return;
+  }
+  res.json({ success: true });
 });
 
 // ── Bulk rotation settings [fork 6/10] ─────────────────────────────────────

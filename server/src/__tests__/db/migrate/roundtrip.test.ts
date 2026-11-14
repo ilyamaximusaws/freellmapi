@@ -59,6 +59,7 @@ const KEY_CONCURRENCY_FILENAME = '20261114_000002_key_concurrency.ts';
 const KEY_CAPS_FILENAME = '20261114_000003_key_caps.ts';
 const ACTION_NEEDED_FILENAME = '20261114_000004_action_needed.ts';
 const KEY_WEIGHT_ORDER_FILENAME = '20261114_000005_key_weight_order.ts';
+const KEY_RATE_LIMITS_FILENAME = '20261114_000006_key_rate_limits.ts';
 
 interface SchemaRow {
   type: string;
@@ -165,6 +166,7 @@ describe('migration round trip', () => {
         KEY_CAPS_FILENAME,
         ACTION_NEEDED_FILENAME,
         KEY_WEIGHT_ORDER_FILENAME,
+        KEY_RATE_LIMITS_FILENAME,
       ]);
     } finally {
       db.close();
