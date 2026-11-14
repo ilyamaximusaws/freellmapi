@@ -13,6 +13,11 @@ import { assessProviderUrl } from '../lib/url-guard.js';
 import { verifyCredentials, recordReauthFailure, clearReauthFailures } from '../services/auth.js';
 import { getActiveCooldownsForKeys, clearCooldownsForKey, clearApinexCheckinCooldownsForKey, resolveKeyConcurrencyLimit } from '../services/ratelimit.js';
 import { getMonthlyBudgetCaps, getMonthlyUsage, nextMonthResetAt } from '../services/key-budget.js';
+import {
+  createCap, updateCap, deleteCap, setKeyAccount, getKeyAccount, getKeyCapSummary, listCaps,
+  CAP_WINDOWS, CAP_UNITS, DEFAULT_SOFT_PERCENT,
+} from '../services/key-caps.js';
+import type { CapWindow, CapUnit } from '../services/key-caps.js';
 import { resolveCustomEndpointKey, customEndpointKeyIds, siblingEndpointKeyId, endpointHasCredential, normalizeGroupLabel, setCustomEndpointGroup } from '../services/custom-endpoint.js';
 import { registerCustomModels, registerCustomChatModels } from '../services/custom-model-register.js';
 import { registerCustomMediaModel } from '../services/custom-media-register.js';
@@ -477,6 +482,9 @@ keysRouter.get('/', (_req: Request, res: Response) => {
     const cooldowns = cooldownsByKeyId.get(Number(row.id)) ?? [];
     const scope = parseModelScope(row.model_scope_json);
     const budgetCaps = getMonthlyBudgetCaps(Number(row.id));
+    // Windowed caps + account grouping [fork 4/10], with live usage and the
+    // next reset so the dashboard can show "X of Y, resets at …".
+    const capSummary = getKeyCapSummary(Number(row.id));
     // Usage alongside the caps so the dashboard can show "342 of 1,000 this
     // month" instead of only the cap (OpenRouter's GET /api/v1/key returns
     // limit_remaining for the same reason).
@@ -491,6 +499,8 @@ keysRouter.get('/', (_req: Request, res: Response) => {
       // "Custom" group.
       groupLabel: row.group_label ?? null,
       monthlyRequestCap: budgetCaps.requestCap,
+      accountKey: capSummary.accountKey,
+      caps: capSummary.caps,
       monthlyTokenCap: budgetCaps.tokenCap,
       // Per-key in-flight cap ([fork 2/10]): raw column + the value actually
       // enforced after the key/platform/global/setting precedence chain.
@@ -2049,3 +2059,122 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
   if (groupLabel !== undefined) response.groupLabel = normalizeGroupLabel(groupLabel);
   res.json(response);
 });
+
+// ── Windowed caps + account grouping [fork 4/10] ────────────────────────────
+// One cap row = a budget for one (window, unit) pair, either on a key or shared
+// by every key carrying the same account_key, optionally narrowed to a single
+// model. Soft percent demotes, hard percent removes from rotation until reset.
+
+const capWindowSchema = z.enum(CAP_WINDOWS as [CapWindow, ...CapWindow[]]);
+const capUnitSchema = z.enum(CAP_UNITS as [CapUnit, ...CapUnit[]]);
+
+const capCreateSchema = z.object({
+  window: capWindowSchema,
+  unit: capUnitSchema,
+  cap: z.number().int().positive(),
+  resetType: z.enum(['calendar', 'sliding']).default('calendar'),
+  timezone: z.string().trim().min(1).max(64).default('UTC'),
+  resetHour: z.number().int().min(0).max(23).default(0),
+  resetDayOfMonth: z.number().int().min(1).max(28).nullable().default(null),
+  softPercent: z.number().int().min(0).max(100).default(DEFAULT_SOFT_PERCENT),
+  // A cap is key-scoped by default; set modelId to narrow it to one model, or
+  // accountKey to make it shared by every key carrying that tag.
+  modelId: z.string().trim().min(1).nullable().default(null),
+  accountKey: z.string().trim().min(1).nullable().default(null),
+}).strict();
+
+const capUpdateSchema = capCreateSchema.partial().strict();
+
+keysRouter.get('/:id/caps', (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: { message: 'Invalid key id' } });
+    return;
+  }
+  const summary = getKeyCapSummary(id);
+  res.json({
+    keyId: id,
+    accountKey: summary.accountKey,
+    caps: summary.caps,
+    // Key caps + account caps; the key list already carries the same summary.
+    all: listCaps({ keyId: id }).concat(summary.accountKey ? listCaps({ accountKey: summary.accountKey }) : []),
+  });
+});
+
+keysRouter.post('/:id/caps', (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: { message: 'Invalid key id' } });
+    return;
+  }
+  const parsed = capCreateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: { message: 'Invalid cap', issues: parsed.error.issues } });
+    return;
+  }
+  if (!getKeyAccount(id) && !dbHasKey(id)) {
+    res.status(404).json({ error: { message: 'Key not found' } });
+    return;
+  }
+  // An explicit accountKey makes the cap account-scoped (shared by every key
+  // with that tag); otherwise it belongs to this key.
+  const cap = parsed.data.accountKey
+    ? createCap({ ...parsed.data, accountKey: parsed.data.accountKey })
+    : createCap({ ...parsed.data, keyId: id });
+  res.status(201).json({ success: true, cap });
+});
+
+keysRouter.patch('/:id/caps/:capId', (req, res) => {
+  const capId = Number(req.params.capId);
+  if (!Number.isInteger(capId) || capId <= 0) {
+    res.status(400).json({ error: { message: 'Invalid cap id' } });
+    return;
+  }
+  const parsed = capUpdateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: { message: 'Invalid cap', issues: parsed.error.issues } });
+    return;
+  }
+  const cap = updateCap(capId, parsed.data);
+  if (!cap) {
+    res.status(404).json({ error: { message: 'Cap not found' } });
+    return;
+  }
+  res.json({ success: true, cap });
+});
+
+keysRouter.delete('/:id/caps/:capId', (req, res) => {
+  const capId = Number(req.params.capId);
+  if (!Number.isInteger(capId) || capId <= 0) {
+    res.status(400).json({ error: { message: 'Invalid cap id' } });
+    return;
+  }
+  if (!deleteCap(capId)) {
+    res.status(404).json({ error: { message: 'Cap not found' } });
+    return;
+  }
+  res.json({ success: true });
+});
+
+// Account grouping: keys sharing this tag draw from ONE account budget.
+keysRouter.put('/:id/account', (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: { message: 'Invalid key id' } });
+    return;
+  }
+  const parsed = z.object({ accountKey: z.string().trim().min(1).nullable() }).strict().safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: { message: 'accountKey must be a non-empty string or null' } });
+    return;
+  }
+  if (!setKeyAccount(id, parsed.data.accountKey)) {
+    res.status(404).json({ error: { message: 'Key not found' } });
+    return;
+  }
+  res.json({ success: true, accountKey: getKeyAccount(id) });
+});
+
+function dbHasKey(id: number): boolean {
+  return (getDb().prepare('SELECT 1 FROM api_keys WHERE id = ?').get(id) as unknown) !== undefined;
+}

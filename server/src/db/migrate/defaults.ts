@@ -50,6 +50,7 @@ import * as customMediaEndpointIdentity from '../migrations/20261028_000001_cust
 import * as cloudflareNeuronUsage from '../migrations/20261104_000001_cloudflare_neuron_usage.js';
 import * as clientLimits from '../migrations/20261114_000001_client_limits.js';
 import * as keyConcurrency from '../migrations/20261114_000002_key_concurrency.js';
+import * as keyCaps from '../migrations/20261114_000003_key_caps.js';
 import * as modelMonthlyUsage from '../migrations/20261111_000001_model_monthly_usage.js';
 import * as profileRoutingStrategy from '../migrations/20261111_000002_profile_routing_strategy.js';
 
@@ -115,6 +116,7 @@ export const MODEL_MONTHLY_USAGE_FILENAME = '20261111_000001_model_monthly_usage
 export const PROFILE_ROUTING_STRATEGY_FILENAME = '20261111_000002_profile_routing_strategy.ts';
 export const CLIENT_LIMITS_FILENAME = '20261114_000001_client_limits.ts';
 export const KEY_CONCURRENCY_FILENAME = '20261114_000002_key_concurrency.ts';
+export const KEY_CAPS_FILENAME = '20261114_000003_key_caps.ts';
 
 export const DEFAULT_MIGRATIONS: readonly DefaultMigration[] = [
   { filename: LEGACY_BASELINE_FILENAME, module: legacyBaseline },
@@ -170,4 +172,5 @@ export const DEFAULT_MIGRATIONS: readonly DefaultMigration[] = [
   { filename: PROFILE_ROUTING_STRATEGY_FILENAME, module: profileRoutingStrategy },
   { filename: CLIENT_LIMITS_FILENAME, module: clientLimits },
   { filename: KEY_CONCURRENCY_FILENAME, module: keyConcurrency },
+  { filename: KEY_CAPS_FILENAME, module: keyCaps },
 ];

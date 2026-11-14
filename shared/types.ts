@@ -383,6 +383,27 @@ export interface ApiKeyCooldown {
   remainingMs: number;
 }
 
+/** [fork 4/10] One windowed cap with its current usage. */
+export interface KeyCapStatus {
+  id: number;
+  scope: 'key' | 'account' | 'model';
+  accountKey: string | null;
+  modelId: string | null;
+  window: 'hour' | 'day' | 'week' | 'month';
+  unit: 'requests' | 'tokens';
+  cap: number;
+  used: number;
+  softPercent: number;
+  softReached: boolean;
+  hardReached: boolean;
+  /** Epoch ms of the next reset (sliding windows roll continuously). */
+  resetAt: number;
+  resetType: 'calendar' | 'sliding';
+  timezone: string;
+  resetHour: number;
+  resetDayOfMonth: number | null;
+}
+
 export interface ApiKey {
   id: number;
   platform: Platform;
@@ -424,6 +445,12 @@ export interface ApiKey {
   /** Current UTC month's successful usage against the caps above, with the
    *  ISO time of the next monthly reset. */
   monthlyUsage?: { requests: number; tokens: number; resetsAt: string };
+  /** [fork 4/10] Account tag: every key sharing it draws from one account
+   *  budget. null = this key is not part of a shared group. */
+  accountKey?: string | null;
+  /** [fork 4/10] Windowed caps visible on this key (its own + account-wide),
+   *  with live usage and the next reset. */
+  caps?: KeyCapStatus[];
   /** The per-key proxy override with its password masked (#590); '' = none. */
   maskedProxyUrl?: string;
   models?: ApiKeyModel[];

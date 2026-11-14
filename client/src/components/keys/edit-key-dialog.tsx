@@ -13,6 +13,7 @@ import { useI18n } from '@/i18n'
 import { PLATFORMS } from './shared'
 import { GroupLabelField } from './group-label-field'
 import { capUsage } from './cap-usage'
+import { KeyCapsSection } from './key-caps-section'
 
 type UpdateBody = {
   label?: string
@@ -334,6 +335,11 @@ export function EditKeyDialog({
               </div>
             ) : null}
           </details>
+
+          {/* Windowed caps [fork 4/10]: hour/day/week/month budgets in requests
+              or tokens, calendar (with timezone) or sliding reset, soft threshold,
+              per-model scope, and an account tag for a shared budget. */}
+          <KeyCapsSection apiKey={apiKey} />
 
           {/* Per-key concurrency ([fork 2/10]): how many requests may be in
               flight against this credential at once. */}

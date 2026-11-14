@@ -30,6 +30,7 @@ import {
 } from './scoring.js';
 import { TIMEOUT_ERROR_MARKERS, isProviderMomentFailure } from '../lib/error-classify.js';
 import { checkMonthlyBudget, reserveMonthlyBudget } from './key-budget.js';
+import { checkKeyCaps, reserveKeyCaps, isCapSoftPressured } from './key-caps.js';
 import { cloudflareNeuronsAvailable } from './cloudflare-neurons.js';
 import { applyModelWeightOverride, getModelWeightOverrides } from './model-weight-overrides.js';
 import { modelsWithOverriddenField, getCatalogModelTombstone } from './model-state.js';
@@ -1675,11 +1676,17 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
     ? customEndpointKeyIds(db, entry.key_id)
     : null;
 
-  for (let attempt = 0; attempt < keys.length; attempt++) {
-    const key = ranked ? ranked[attempt] : keys[idx % keys.length];
-    idx++;
+  // [fork 4/10] Soft cap pressure demotes instead of removing: pass 1 walks with
+  // soft-pressured keys skipped, pass 2 accepts them when nothing cleaner is left.
+  // Both passes are side-effect free until a key is actually returned, so the
+  // second walk never double-reserves a lease.
+  const walk = (allowSoft: boolean): RouteResult | null => {
+    for (let attempt = 0; attempt < keys.length; attempt++) {
+      const key = ranked ? ranked[attempt] : keys[idx % keys.length];
+      idx++;
 
-    if (endpointKeyIds && !endpointKeyIds.has(key.id)) { note('custom-key-mismatch'); continue; }
+      if (endpointKeyIds && !endpointKeyIds.has(key.id)) { note('custom-key-mismatch'); continue; }
+      if (!allowSoft && isCapSoftPressured(key.id, entry.model_id)) { note('key-cap-soft'); continue; }
 
     const skipId = `${entry.platform}:${entry.model_id}:${key.id}`;
     if (skipKeys?.has(skipId)) { note('already-failed-this-request'); continue; }
@@ -1709,6 +1716,9 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
     // gates above. The Retry-After (next-month boundary) surfaces through the
     // fallback exhaustion path rather than blocking here.
     if (!checkMonthlyBudget(key.id, estimatedTokens).allowed) { note('monthly-budget-cap'); continue; }
+    // Windowed caps [fork 4/10]: a cap at its hard threshold leaves rotation
+    // until that window resets (Retry-After rides the exhaustion path).
+    if (!checkKeyCaps(key.id, { estimatedTokens, modelId: entry.model_id }).allowed) { note('key-cap'); continue; }
 
     let decryptedKey: string;
     try {
@@ -1735,6 +1745,8 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
     const proxyUrl = decryptProxyUrl(key);
     const budget = reserveMonthlyBudget(key.id, estimatedTokens);
     if (!budget.allowed) { note('monthly-budget-cap'); continue; }
+    const capReserve = reserveKeyCaps(key.id, { estimatedTokens, modelId: entry.model_id });
+    if (!capReserve.allowed) { note('key-cap'); continue; }
     const leaseId = acquireLease(entry.platform, entry.model_id, key.id, estimatedTokens);
     return {
       provider: resolvedProvider,
@@ -1751,16 +1763,21 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
       endpointScope: entry.endpoint_scope ?? '',
       rpdLimit: limits.rpd,
       tpdLimit: limits.tpd,
-      release: () => { releaseLease(leaseId); budget.release(); },
+      release: () => { releaseLease(leaseId); budget.release(); capReserve.release(); },
     };
-  }
+    }
+    return null;
+  };
 
+  const selected = walk(false) ?? walk(true);
   // No usable key for this model. Advance the round-robin index anyway so we
   // don't get stuck re-trying the same exhausted key first next time.
-  roundRobinIndex.set(rrKey, idx);
-  const summary = Object.entries(skipTally).map(([r, n]) => `${r}:${n}`).join(', ') || 'no usable key';
-  diag?.push(`${label}: ${keys.length} key(s) — ${summary}`);
-  return null;
+  roundRobinIndex.set(rrKey, idx % Math.max(1, keys.length));
+  if (!selected) {
+    const summary = Object.entries(skipTally).map(([r, n]) => `${r}:${n}`).join(', ') || 'no usable key';
+    diag?.push(`${label}: ${keys.length} key(s) — ${summary}`);
+  }
+  return selected;
 }
 
 /**
