@@ -1,4 +1,4 @@
-/**
+/*!
  * Windowed caps [fork 4/10].
  *
  * Generalises the legacy UTC-month budget (services/key-budget.ts) to any window:
@@ -274,33 +274,45 @@ export interface CapInput {
 }
 
 function validateCap(input: CapInput): string | null {
+  // Defaults are materialized so every stored row is complete and each
+  // branch can assert on a known type.
+  // `??` after Number() would not default: Number(undefined) is NaN, which is
+  // neither null nor undefined. Default first, then coerce.
+  const resetType: CapResetType = input.resetType ?? 'calendar';
+  const timezone = safeTimezone(input.timezone);   // throws on an unknown zone
+  const resetHour: number = input.resetHour ?? 0;
+  const resetDayOfMonth: number | null = input.resetDayOfMonth ?? null;
+  const softPercent: number = input.softPercent ?? DEFAULT_SOFT_PERCENT;
   if (!CAP_WINDOWS.includes(input.window)) return `unknown window ${input.window}`;
   if (!CAP_UNITS.includes(input.unit)) return `unknown unit ${input.unit}`;
   if (!Number.isInteger(input.cap) || input.cap <= 0) return 'cap must be a positive integer';
   if (input.keyId == null && !input.accountKey) return 'a cap needs a key_id or an account_key';
   if (input.keyId != null && input.accountKey) return 'a cap is either key-scoped or account-scoped';
-  const soft = input.softPercent ?? DEFAULT_SOFT_PERCENT;
-  if (!Number.isInteger(soft) || soft < 0 || soft > 100) return 'softPercent must be an integer 0..100';
-  if (input.resetHour !== undefined && (!Number.isInteger(input.resetHour) || input.resetHour < 0 || input.resetHour > 23)) {
+  if (!Number.isInteger(softPercent) || softPercent < 0 || softPercent > 100) {
+    return 'softPercent must be an integer 0..100';
+  }
+  if (!Number.isInteger(resetHour) || resetHour < 0 || resetHour > 23) {
     return 'resetHour must be an integer 0..23';
   }
-  if (input.resetDayOfMonth != null) {
-    if (!Number.isInteger(input.resetDayOfMonth)
-      || input.resetDayOfMonth < CAP_RESET_DAY_MIN
-      || input.resetDayOfMonth > CAP_RESET_DAY_MAX) {
-      return `resetDayOfMonth must be ${CAP_RESET_DAY_MIN}..${CAP_RESET_DAY_MAX}`;
-    }
+  if (resetDayOfMonth !== null && (!Number.isInteger(resetDayOfMonth)
+      || resetDayOfMonth < CAP_RESET_DAY_MIN
+      || resetDayOfMonth > CAP_RESET_DAY_MAX)) {
+    return `resetDayOfMonth must be ${CAP_RESET_DAY_MIN}..${CAP_RESET_DAY_MAX}`;
   }
-  if (input.resetType && input.resetType !== 'calendar' && input.resetType !== 'sliding') {
-    return `unknown resetType ${input.resetType}`;
+  if (resetType !== 'calendar' && resetType !== 'sliding') {
+    return `unknown resetType ${resetType}`;
   }
-  safeTimezone(input.timezone ?? 'UTC');
   return null;
 }
 
 export function createCap(input: CapInput, db = getDb()): KeyCapRow {
   const problem = validateCap(input);
   if (problem) throw new Error(problem);
+  const resetType: CapResetType = input.resetType ?? 'calendar';
+  const timezone = safeTimezone(input.timezone);
+  const resetHour: number = input.resetHour ?? 0;
+  const resetDayOfMonth: number | null = input.resetDayOfMonth ?? null;
+  const softPercent: number = input.softPercent ?? DEFAULT_SOFT_PERCENT;
   const info = db.prepare(`
     INSERT INTO key_caps
       (key_id, account_key, model_id, window, unit, cap, reset_type, timezone,
@@ -313,11 +325,11 @@ export function createCap(input: CapInput, db = getDb()): KeyCapRow {
     input.window,
     input.unit,
     input.cap,
-    input.resetType ?? 'calendar',
-    safeTimezone(input.timezone),
-    input.resetHour ?? 0,
-    input.resetDayOfMonth ?? null,
-    input.softPercent ?? DEFAULT_SOFT_PERCENT,
+    resetType,
+    timezone,
+    resetHour,
+    resetDayOfMonth,
+    softPercent,
   );
   const row = db.prepare('SELECT * FROM key_caps WHERE id = ?').get(info.lastInsertRowid) as Record<string, unknown>;
   return dbToRow(row);
