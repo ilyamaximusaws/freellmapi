@@ -120,8 +120,13 @@ describe('per-key rate limits ([fork 7/10])', () => {
   it('refuses the 11th request in a minute when rpm=10', () => {
     const keyId = insertKey({ rpm: 10, label: 'rpm10' });
     addModel('rpm-model');
-    for (let i = 0; i < 10; i++) insertUsage(keyId, 'request', 0, T0 - (10 - i) * 1000);
-    expect(checkKeyRateLimits(keyId, T0).allowed).toBe(false);
+    // Anchor to the wall clock. `routeRequest` reads Date.now() internally, and
+    // the window query counts rows with created_at_ms > now - 60s, so a fixed
+    // T0 ages out of the window as real time passes and the route-level
+    // assertion would silently stop exercising anything.
+    const now = Date.now();
+    for (let i = 0; i < 10; i++) insertUsage(keyId, 'request', 0, now - (10 - i) * 1000);
+    expect(checkKeyRateLimits(keyId, now).allowed).toBe(false);
 
     // Route-level: the exhausted key is skipped (only model, so the request fails).
     expect(() => routeRequest(100)).toThrow();
