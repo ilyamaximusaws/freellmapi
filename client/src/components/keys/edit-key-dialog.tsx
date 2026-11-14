@@ -126,10 +126,16 @@ export function EditKeyDialog({
   // Rotation weight/order ([fork 6/10]): '' means "leave unchanged".
   const [weight, setWeight] = useState(String(apiKey.weight ?? 1))
   const [order, setOrder] = useState(String(apiKey.order ?? 0))
-  // Per-key rate caps ([fork 7/10]): blank = unlimited.
-  const [rpm, setRpm] = useState(apiKey.rpm ? String(apiKey.rpm) : '')
-  const [tpm, setTpm] = useState(apiKey.tpm ? String(apiKey.tpm) : '')
-  const [rpd, setRpd] = useState(apiKey.rpd ? String(apiKey.rpd) : '')
+  // Per-key rate caps ([fork 7/10]): blank = unlimited. The server reports the
+  // live caps under `rate.limits` (KeyRateSummary); the flat `rpm/tpm/rpd`
+  // fields are a legacy alias, so read both and prefer the nested shape.
+  const rateLimits = apiKey.rate?.limits
+  const initialRpm = rateLimits?.rpm ?? apiKey.rpm ?? null
+  const initialTpm = rateLimits?.tpm ?? apiKey.tpm ?? null
+  const initialRpd = rateLimits?.rpd ?? apiKey.rpd ?? null
+  const [rpm, setRpm] = useState(initialRpm != null ? String(initialRpm) : '')
+  const [tpm, setTpm] = useState(initialTpm != null ? String(initialTpm) : '')
+  const [rpd, setRpd] = useState(initialRpd != null ? String(initialRpd) : '')
   // Operator metadata ([fork 9/10]).
   const md = apiKey.metadata
   const [owner, setOwner] = useState(md?.owner ?? '')
@@ -194,9 +200,9 @@ export function EditKeyDialog({
   const tpmValue = tpmTrimmed === '' ? 0 : Number(tpmTrimmed)
   const rpdValue = rpdTrimmed === '' ? 0 : Number(rpdTrimmed)
   const rateValid = /^\d*$/.test(rpmTrimmed) && /^\d*$/.test(tpmTrimmed) && /^\d*$/.test(rpdTrimmed)
-  const rpmChanged = rpmValue !== (apiKey.rpm ?? 0)
-  const tpmChanged = tpmValue !== (apiKey.tpm ?? 0)
-  const rpdChanged = rpdValue !== (apiKey.rpd ?? 0)
+  const rpmChanged = rpmValue !== (rateLimits?.rpm ?? apiKey.rpm ?? 0)
+  const tpmChanged = tpmValue !== (rateLimits?.tpm ?? apiKey.tpm ?? 0)
+  const rpdChanged = rpdValue !== (rateLimits?.rpd ?? apiKey.rpd ?? 0)
   // Operator metadata ([fork 9/10]): credits/reminder are optional non-negative
   // numbers; tags are a comma list. null in the body clears server-side.
   const creditsTrimmed = credits.trim()

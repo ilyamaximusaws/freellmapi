@@ -104,8 +104,18 @@ describe('per-key rate limits over the API ([fork 7/10])', () => {
   it('exposes live rate state and usage on the key list', async () => {
     const keyId = insertKey('rate-visible');
     const keys = await request('GET', '/api/keys', { token: dashToken });
-    const row = (keys.body as Array<{ id: number; rate: { limits: { rpm: number | null } } }>).find(k => k.id === keyId);
+    const row = (keys.body as Array<{ id: number; rpm: number | null; rate: { limits: { rpm: number | null } } }>).find(k => k.id === keyId);
     expect(row?.rate.limits.rpm).toBeNull();
+    // Flat alias of the same number, so the declared ApiKey type reads the caps.
+    expect(row?.rpm).toBeNull();
+  })
+
+  it('mirrors a saved cap into the flat rpm/tpm/rpd alias', async () => {
+    const keyId = insertKey('rate-alias');
+    await request('PATCH', `/api/keys/${keyId}`, { token: dashToken, body: { rpm: 60, tpm: 1000, rpd: 5000 } });
+    const keys = await request('GET', '/api/keys', { token: dashToken });
+    const row = (keys.body as Array<{ id: number; rpm: number | null; tpm: number | null; rpd: number | null }>).find(k => k.id === keyId);
+    expect(row).toMatchObject({ rpm: 60, tpm: 1000, rpd: 5000 });
   });
 
   it('requires the dashboard token', async () => {

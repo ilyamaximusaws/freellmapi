@@ -201,4 +201,45 @@ describe('editing provider credentials', () => {
     expect(apiFetch).toHaveBeenCalledWith('/api/models')
     expect(apiFetch).not.toHaveBeenCalledWith('/api/fallback')
   })
+  it('pre-fills RPM/TPM/RPD from the nested rate.limits shape the API returns', () => {
+    mount(<EditKeyDialog apiKey={{ ...key, platform: 'groq', rate: {
+      limits: { rpm: 60, tpm: 1000, rpd: 5000 },
+      usage: { minute: { requests: 0, tokens: 0 }, day: { requests: 0, tokens: 0 } },
+      provider: null,
+    } }} onOpenChange={onOpenChange} />)
+    expect(container.querySelector<HTMLInputElement>('#edit-key-rpm')!.value).toBe('60')
+    expect(container.querySelector<HTMLInputElement>('#edit-key-tpm')!.value).toBe('1000')
+    expect(container.querySelector<HTMLInputElement>('#edit-key-rpd')!.value).toBe('5000')
+  })
+  it('sends a changed RPM and leaves the untouched caps out', async () => {
+    mount(<EditKeyDialog apiKey={{ ...key, platform: 'groq', rate: {
+      limits: { rpm: 60, tpm: 1000, rpd: 5000 },
+      usage: { minute: { requests: 0, tokens: 0 }, day: { requests: 0, tokens: 0 } },
+      provider: null,
+    } }} onOpenChange={onOpenChange} />)
+    enter('#edit-key-rpm', '120')
+    await submit()
+    expect(apiFetch).toHaveBeenCalledWith('/api/keys/7', { method: 'PATCH', body: JSON.stringify({ rpm: 120 }) })
+  })
+  it('does not resend unchanged RPM/TPM/RPD', async () => {
+    mount(<EditKeyDialog apiKey={{ ...key, platform: 'groq', rate: {
+      limits: { rpm: 60, tpm: 1000, rpd: 5000 },
+      usage: { minute: { requests: 0, tokens: 0 }, day: { requests: 0, tokens: 0 } },
+      provider: null,
+    } }} onOpenChange={onOpenChange} />)
+    enter('#edit-key-label', 'Renamed')
+    await submit()
+    const body = JSON.parse(vi.mocked(apiFetch).mock.calls[0]![1]!.body as string)
+    expect(body).toEqual({ label: 'Renamed' })
+  })
+  it('a blank RPM field clears the cap (sends 0)', async () => {
+    mount(<EditKeyDialog apiKey={{ ...key, platform: 'groq', rate: {
+      limits: { rpm: 60, tpm: null, rpd: null },
+      usage: { minute: { requests: 0, tokens: 0 }, day: { requests: 0, tokens: 0 } },
+      provider: null,
+    } }} onOpenChange={onOpenChange} />)
+    enter('#edit-key-rpm', '')
+    await submit()
+    expect(apiFetch).toHaveBeenCalledWith('/api/keys/7', { method: 'PATCH', body: JSON.stringify({ rpm: 0 }) })
+  })
 })

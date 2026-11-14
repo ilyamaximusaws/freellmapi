@@ -569,6 +569,12 @@ keysRouter.get('/', (_req: Request, res: Response) => {
       // Rotation share and group ([fork 6/10]).
       weight: row.weight ?? 1,
       order: row.key_order ?? 0,
+      // Per-key rate caps ([fork 7/10]): flat alias of `rate.limits` so the
+      // declared ApiKey type (and any older dashboard build) reads the same
+      // numbers the router enforces.
+      rpm: rate.limits.rpm,
+      tpm: rate.limits.tpm,
+      rpd: rate.limits.rpd,
       // Operator context ([fork 9/10]): owner, expiry, credits, tags, note.
       metadata: getKeyMetadata(Number(row.id)),
       effectiveMaxConcurrent: resolveKeyConcurrencyLimit(row.platform, row.max_concurrent).limit,
