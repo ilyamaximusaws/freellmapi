@@ -29,6 +29,9 @@ import {
 import {
   penaltySnapshot, allPenaltySnapshots, clearKeyPenalty,
 } from '../services/key-failure-penalty.js';
+import {
+  getKeyMetadata, setKeyMetadata, tagSummary, bulkApplyToTag,
+} from '../services/key-metadata.js';
 import { resolveCustomEndpointKey, customEndpointKeyIds, siblingEndpointKeyId, endpointHasCredential, normalizeGroupLabel, setCustomEndpointGroup } from '../services/custom-endpoint.js';
 import { registerCustomModels, registerCustomChatModels } from '../services/custom-model-register.js';
 import { registerCustomMediaModel } from '../services/custom-media-register.js';
@@ -188,7 +191,16 @@ const updateKeySchema = z.object({
   rpm: z.number().int().min(0).max(1_000_000_000).optional(),
   tpm: z.number().int().min(0).max(1_000_000_000_000).optional(),
   rpd: z.number().int().min(0).max(1_000_000_000).optional(),
-}).refine(data => data.enabled !== undefined || data.label !== undefined || data.modelScope !== undefined || data.proxyUrl !== undefined || data.key !== undefined || data.monthlyRequestCap !== undefined || data.monthlyTokenCap !== undefined || data.groupLabel !== undefined || data.maxConcurrent !== undefined || data.weight !== undefined || data.order !== undefined || data.rpm !== undefined || data.tpm !== undefined || data.rpd !== undefined, {
+  // Operator metadata ([fork 9/10]): null clears, undefined leaves untouched.
+  owner: z.string().trim().max(200).nullable().optional(),
+  consoleUrl: z.string().trim().max(2000).nullable().optional(),
+  note: z.string().trim().max(2000).nullable().optional(),
+  tags: z.union([z.array(z.string().trim().max(50)), z.string().max(500)]).nullable().optional(),
+  keyType: z.enum(['free', 'credits', 'paid']).nullable().optional(),
+  creditsRemaining: z.number().min(0).nullable().optional(),
+  expiresAt: z.string().trim().max(64).nullable().optional(),
+  expireReminderDays: z.number().int().min(0).max(365).optional(),
+}).refine(data => data.enabled !== undefined || data.label !== undefined || data.modelScope !== undefined || data.proxyUrl !== undefined || data.key !== undefined || data.monthlyRequestCap !== undefined || data.monthlyTokenCap !== undefined || data.groupLabel !== undefined || data.maxConcurrent !== undefined || data.weight !== undefined || data.order !== undefined || data.rpm !== undefined || data.tpm !== undefined || data.rpd !== undefined || data.owner !== undefined || data.consoleUrl !== undefined || data.note !== undefined || data.tags !== undefined || data.keyType !== undefined || data.creditsRemaining !== undefined || data.expiresAt !== undefined || data.expireReminderDays !== undefined, {
   message: 'At least one field must be provided',
 });
 
@@ -556,6 +568,8 @@ keysRouter.get('/', (_req: Request, res: Response) => {
       // Rotation share and group ([fork 6/10]).
       weight: row.weight ?? 1,
       order: row.key_order ?? 0,
+      // Operator context ([fork 9/10]): owner, expiry, credits, tags, note.
+      metadata: getKeyMetadata(Number(row.id)),
       effectiveMaxConcurrent: resolveKeyConcurrencyLimit(row.platform, row.max_concurrent).limit,
       monthlyUsage: {
         requests: monthlyUsage.requests,
@@ -1990,7 +2004,7 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
     return;
   }
 
-  const { enabled, label, modelScope, proxyUrl, key, monthlyRequestCap, monthlyTokenCap, groupLabel, maxConcurrent, weight, order, rpm, tpm, rpd } = parsed.data;
+  const { enabled, label, modelScope, proxyUrl, key, monthlyRequestCap, monthlyTokenCap, groupLabel, maxConcurrent, weight, order, rpm, tpm, rpd, owner, consoleUrl, note, tags, keyType, creditsRemaining, expiresAt, expireReminderDays } = parsed.data;
   const updates: string[] = [];
   const values: (string | number | null)[] = [];
   let changedKey: string | undefined;
@@ -2085,6 +2099,11 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
     updates.push('rpd_limit = ?');
     values.push(rpd === 0 ? null : rpd);
   }
+  // Operator metadata ([fork 9/10]): separate service so a PATCH here stays a
+  // plain column UPDATE while tags/expiry live in one place.
+  const metadataPatchGiven = owner !== undefined || consoleUrl !== undefined || note !== undefined
+    || tags !== undefined || keyType !== undefined || creditsRemaining !== undefined
+    || expiresAt !== undefined || expireReminderDays !== undefined;
   // Custom-endpoint group label (#1176) is written below, across the
   // endpoint's whole key pool rather than this one row.
   const db = getDb();
@@ -2125,6 +2144,13 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
 
   if (changedKey !== undefined) clearCooldownsForKey(id);
 
+  let metadata = null;
+  if (metadataPatchGiven) {
+    metadata = setKeyMetadata(id, {
+      owner, consoleUrl, note, tags, keyType, creditsRemaining, expiresAt, expireReminderDays,
+    });
+  }
+
   const response: Record<string, unknown> = { success: true };
   if (enabled !== undefined) response.enabled = enabled;
   if (label !== undefined) response.label = label;
@@ -2134,6 +2160,7 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
   if (groupLabel !== undefined) response.groupLabel = normalizeGroupLabel(groupLabel);
   if (weight !== undefined) response.weight = weight;
   if (order !== undefined) response.order = order;
+  if (metadata) response.metadata = metadata;
   res.json(response);
 });
 
@@ -2157,6 +2184,40 @@ keysRouter.delete('/:id/penalty', (req: Request, res: Response) => {
   }
   res.json({ success: true });
 });
+
+// ── Tags and bulk operations by tag ([fork 9/10]) ───────────────────────────
+// Tags let the operator treat a group as a unit: flip every "trial" key off at
+// once, or bump their expiry reminder, without clicking through each row.
+
+const bulkTagSchema = z.object({
+  tag: z.string().trim().min(1).max(50),
+  enabled: z.boolean().optional(),
+  owner: z.string().trim().max(200).nullable().optional(),
+  consoleUrl: z.string().trim().max(2000).nullable().optional(),
+  note: z.string().trim().max(2000).nullable().optional(),
+  keyType: z.enum(['free', 'credits', 'paid']).nullable().optional(),
+  creditsRemaining: z.number().min(0).nullable().optional(),
+  expiresAt: z.string().trim().max(64).nullable().optional(),
+  expireReminderDays: z.number().int().min(0).max(365).optional(),
+}).strict().refine(data => data.enabled !== undefined || data.owner !== undefined || data.consoleUrl !== undefined || data.note !== undefined || data.keyType !== undefined || data.creditsRemaining !== undefined || data.expiresAt !== undefined || data.expireReminderDays !== undefined, {
+  message: 'At least one of enabled, owner, consoleUrl, note, keyType, creditsRemaining, expiresAt or expireReminderDays must be provided',
+});
+
+keysRouter.get('/tags', (_req: Request, res: Response) => {
+  res.json({ tags: tagSummary() });
+});
+
+keysRouter.patch('/bulk/tags', (req: Request, res: Response) => {
+  const parsed = bulkTagSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: { message: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ') } });
+    return;
+  }
+  const { tag, enabled, ...metadata } = parsed.data;
+  const result = bulkApplyToTag(tag, { ...metadata, enabled });
+  res.json({ tag, ...result });
+});
+
 
 // ── Key-wide cooldowns and rate state [fork 7/10] ──────────────────────────
 // A manual cooldown (park a key with a reason) or the provider's last rate-limit

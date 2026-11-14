@@ -14,6 +14,7 @@ import {
   Sun,
   Wrench,
   Workflow,
+  BellRing,
   X,
 } from 'lucide-react'
 import {
@@ -28,6 +29,7 @@ import { Tooltip } from '@/components/tooltip'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SUPPORTED_LOCALES, type Locale, useI18n } from '@/i18n'
+import { NotificationsSection } from './notifications-section'
 import { type Theme, useTheme } from '@/theme-context'
 import { apiFetch } from '@/lib/api'
 import { useDesktopLoginItem } from '@/lib/desktop-login-item'
@@ -284,13 +286,14 @@ const ENGINES = [
   { id: 'hard-budget', tKey: 'engineHardBudget', lossless: false },
 ] as const
 
-type SectionId = 'general' | 'compression' | 'advanced' | 'router' | 'preview'
+type SectionId = 'general' | 'compression' | 'advanced' | 'router' | 'notifications' | 'preview'
 
 const SECTIONS = [
   { id: 'general', tKey: 'sectionGeneral', icon: SlidersHorizontal },
   { id: 'compression', tKey: 'sectionCompression', icon: Gauge },
   { id: 'advanced', tKey: 'sectionAdvanced', icon: Wrench },
   { id: 'router', tKey: 'sectionRouter', icon: Workflow },
+  { id: 'notifications', tKey: 'sectionNotifications', icon: BellRing },
   { id: 'preview', tKey: 'sectionPreview', icon: FlaskConical },
 ] as const satisfies ReadonlyArray<{ id: SectionId; tKey: string; icon: typeof Gauge }>
 
@@ -792,6 +795,7 @@ export function SettingsDialog({
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:min-h-[27rem] sm:px-6 sm:py-6">
             {section === 'general' && <GeneralSection />}
             {section === 'router' && <RouterSection />}
+            {section === 'notifications' && <NotificationsSection />}
             {loading && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" />

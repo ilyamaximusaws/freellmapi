@@ -32,6 +32,14 @@ type UpdateBody = {
   tpm?: number
   rpd?: number
   rate?: import('../../../../shared/types').KeyRateSummary
+  owner?: string | null
+  consoleUrl?: string | null
+  note?: string | null
+  tags?: string[]
+  keyType?: import('../../../../shared/types').KeyType | null
+  creditsRemaining?: number | null
+  expiresAt?: string | null
+  expireReminderDays?: number
   groupLabel?: string
   proxyUrl?: string
 }
@@ -122,6 +130,15 @@ export function EditKeyDialog({
   const [rpm, setRpm] = useState(apiKey.rpm ? String(apiKey.rpm) : '')
   const [tpm, setTpm] = useState(apiKey.tpm ? String(apiKey.tpm) : '')
   const [rpd, setRpd] = useState(apiKey.rpd ? String(apiKey.rpd) : '')
+  // Operator metadata ([fork 9/10]).
+  const md = apiKey.metadata
+  const [owner, setOwner] = useState(md?.owner ?? '')
+  const [note, setNote] = useState(md?.note ?? '')
+  const [keyType, setKeyType] = useState(md?.keyType ?? 'free')
+  const [credits, setCredits] = useState(md?.creditsRemaining != null ? String(md.creditsRemaining) : '')
+  const [expiresAt, setExpiresAt] = useState(md?.expiresAt ? md.expiresAt.slice(0, 10) : '')
+  const [reminderDays, setReminderDays] = useState(String(md?.expireReminderDays ?? 3))
+  const [tags, setTags] = useState((md?.tags ?? []).join(', '))
   // Per-key concurrency cap ([fork 2/10]): blank = inherit the provider/global
   // cap, 0 = unlimited, N = at most N requests in flight on this credential.
   const [maxConcurrentInput, setMaxConcurrentInput] = useState(
@@ -180,7 +197,25 @@ export function EditKeyDialog({
   const rpmChanged = rpmValue !== (apiKey.rpm ?? 0)
   const tpmChanged = tpmValue !== (apiKey.tpm ?? 0)
   const rpdChanged = rpdValue !== (apiKey.rpd ?? 0)
-  const hasChanges = label !== apiKey.label || Boolean(credential) || requestCapChanged || tokenCapChanged || groupLabelChanged || proxyChanged || maxConcurrentChanged || weightChanged || orderChanged || rpmChanged || tpmChanged || rpdChanged
+  // Operator metadata ([fork 9/10]): credits/reminder are optional non-negative
+  // numbers; tags are a comma list. null in the body clears server-side.
+  const creditsTrimmed = credits.trim()
+  const creditsValid = creditsTrimmed === '' || /^\d*\.?\d+$/.test(creditsTrimmed)
+  const reminderTrimmed = reminderDays.trim()
+  const reminderValid = /^\d+$/.test(reminderTrimmed)
+  const ownerValue = owner.trim()
+  const noteValue = note.trim()
+  const expiresValue = expiresAt.trim()
+  const tagsValue = tags.trim()
+  const ownerChanged = ownerValue !== (md?.owner ?? '')
+  const noteChanged = noteValue !== (md?.note ?? '')
+  const keyTypeChanged = keyType !== (md?.keyType ?? 'free')
+  const creditsChanged = creditsValid && (creditsTrimmed === '' ? null : Number(creditsTrimmed)) !== (md?.creditsRemaining ?? null)
+  const expiresChanged = expiresValue !== (md?.expiresAt ? md.expiresAt.slice(0, 10) : '')
+  const reminderChanged = reminderValid && Number(reminderTrimmed) !== (md?.expireReminderDays ?? 3)
+  const tagsChanged = tagsValue !== (md?.tags ?? []).join(', ')
+  const metadataChanged = ownerChanged || noteChanged || keyTypeChanged || creditsChanged || expiresChanged || reminderChanged || tagsChanged
+  const hasChanges = label !== apiKey.label || Boolean(credential) || requestCapChanged || tokenCapChanged || groupLabelChanged || proxyChanged || maxConcurrentChanged || weightChanged || orderChanged || rpmChanged || tpmChanged || rpdChanged || metadataChanged
 
   const updateKey = useMutation({
     mutationFn: (body: UpdateBody) =>
@@ -194,7 +229,7 @@ export function EditKeyDialog({
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (credentialError || capError || !maxConcurrentValid || !weightValid || !orderValid || !rateValid) {
+    if (credentialError || capError || !maxConcurrentValid || !weightValid || !orderValid || !rateValid || !creditsValid || !reminderValid) {
       setAttempted(true)
       return
     }
@@ -210,6 +245,14 @@ export function EditKeyDialog({
     if (rpmChanged) body.rpm = rpmValue
     if (tpmChanged) body.tpm = tpmValue
     if (rpdChanged) body.rpd = rpdValue
+    // Operator metadata ([fork 9/10]): always send the current value, '' = null.
+    if (ownerChanged) body.owner = ownerValue || null
+    if (noteChanged) body.note = noteValue || null
+    if (keyTypeChanged) body.keyType = keyType
+    if (creditsChanged) body.creditsRemaining = creditsTrimmed === '' ? null : Number(creditsTrimmed)
+    if (expiresChanged) body.expiresAt = expiresValue || null
+    if (reminderChanged) body.expireReminderDays = Number(reminderTrimmed)
+    if (tagsChanged) body.tags = tagsValue ? tagsValue.split(',').map(t => t.trim()).filter(Boolean) : []
     if (groupLabelChanged) body.groupLabel = groupLabel.trim()
     // '' clears the override; a typed URL replaces it (and wins over Remove).
     if (proxyChanged) body.proxyUrl = proxyUrl.trim()
@@ -459,6 +502,55 @@ export function EditKeyDialog({
               })}
             </p>
           )}
+
+          {/* Operator metadata ([fork 9/10]): owner, budget kind, expiry and
+              tags. Collapsed unless something is already set. */}
+          <details className="group" open={Boolean(md?.owner || md?.note || md?.expiresAt || (md?.tags?.length ?? 0) > 0) || undefined}>
+            <summary className="cursor-pointer select-none text-[11px] text-muted-foreground hover:text-foreground">
+              {t('keys.metadataTitle')}
+            </summary>
+            <div className="mt-2 grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs" htmlFor="edit-key-owner">{t('keys.metadataOwner')}</Label>
+                <Input id="edit-key-owner" value={owner} onChange={e => setOwner(e.target.value)} placeholder="owner@example.com" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs" htmlFor="edit-key-type">{t('keys.metadataType')}</Label>
+                <select
+                  id="edit-key-type"
+                  value={keyType}
+                  onChange={e => setKeyType(e.target.value as 'free' | 'credits' | 'paid')}
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                >
+                  <option value="free">{t('keys.metadataTypeFree')}</option>
+                  <option value="credits">{t('keys.metadataTypeCredits')}</option>
+                  <option value="paid">{t('keys.metadataTypePaid')}</option>
+                </select>
+              </div>
+              {keyType === 'credits' && (
+                <div className="space-y-1.5">
+                  <Label className="text-xs" htmlFor="edit-key-credits">{t('keys.metadataCredits')}</Label>
+                  <Input id="edit-key-credits" inputMode="decimal" value={credits} onChange={e => setCredits(e.target.value)} placeholder="12.50" className="font-mono text-xs" />
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <Label className="text-xs" htmlFor="edit-key-expires">{t('keys.metadataExpires')}</Label>
+                <Input id="edit-key-expires" type="date" value={expiresAt} onChange={e => setExpiresAt(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs" htmlFor="edit-key-reminder">{t('keys.metadataReminder')}</Label>
+                <Input id="edit-key-reminder" inputMode="numeric" value={reminderDays} onChange={e => setReminderDays(e.target.value)} className="font-mono text-xs" />
+              </div>
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label className="text-xs" htmlFor="edit-key-tags">{t('keys.metadataTags')}</Label>
+                <Input id="edit-key-tags" value={tags} onChange={e => setTags(e.target.value)} placeholder="trial, west, low-priority" />
+              </div>
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label className="text-xs" htmlFor="edit-key-note">{t('keys.metadataNote')}</Label>
+                <Input id="edit-key-note" value={note} onChange={e => setNote(e.target.value)} placeholder={t('keys.metadataNotePlaceholder')} />
+              </div>
+            </div>
+          </details>
 
           {updateKey.isError && (
             <p className="text-xs text-destructive">{(updateKey.error as Error).message}</p>

@@ -399,6 +399,22 @@ export interface KeyRateSummary {
   } | null;
 }
 
+/** [fork 9/10] Kind of budget backing a key's credential. */
+export type KeyType = 'free' | 'credits' | 'paid';
+
+/** [fork 9/10] Operator-facing metadata attached to a key. */
+export interface KeyMetadata {
+  keyId: number;
+  owner: string | null;
+  consoleUrl: string | null;
+  note: string | null;
+  tags: string[];
+  keyType: KeyType;
+  creditsRemaining: number | null;
+  expiresAt: string | null;
+  expireReminderDays: number;
+}
+
 /** [fork 8/10] The key's failure-streak penalty: where it is, and how far away
  *  the trial request is. */
 export interface KeyPenaltyInfo {
@@ -513,6 +529,8 @@ export interface ApiKey {
   keyCooldown?: KeyCooldownInfo | null;
   /** [fork 8/10] Failure-streak penalty state (in memory; absent = clean). */
   penalty?: KeyPenaltyInfo | null;
+  /** [fork 9/10] Operator metadata (owner, expiry, credits, tags, note). */
+  metadata?: KeyMetadata | null;
   /** The cap actually enforced after key → platform → global → setting. */
   effectiveMaxConcurrent?: number | null;
   /** Current UTC month's successful usage against the caps above, with the

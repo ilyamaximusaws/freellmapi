@@ -54,6 +54,7 @@ import * as keyCaps from '../migrations/20261114_000003_key_caps.js';
 import * as actionNeeded from '../migrations/20261114_000004_action_needed.js';
 import * as keyWeightOrder from '../migrations/20261114_000005_key_weight_order.js';
 import * as keyRateLimits from '../migrations/20261114_000006_key_rate_limits.js';
+import * as keyMetadataNotifications from '../migrations/20261114_000007_key_metadata_notifications.js';
 import * as modelMonthlyUsage from '../migrations/20261111_000001_model_monthly_usage.js';
 import * as profileRoutingStrategy from '../migrations/20261111_000002_profile_routing_strategy.js';
 
@@ -123,6 +124,7 @@ export const KEY_CAPS_FILENAME = '20261114_000003_key_caps.ts';
 export const ACTION_NEEDED_FILENAME = '20261114_000004_action_needed.ts';
 export const KEY_WEIGHT_ORDER_FILENAME = '20261114_000005_key_weight_order.ts';
 export const KEY_RATE_LIMITS_FILENAME = '20261114_000006_key_rate_limits.ts';
+export const KEY_METADATA_NOTIFICATIONS_FILENAME = '20261114_000007_key_metadata_notifications.ts';
 
 export const DEFAULT_MIGRATIONS: readonly DefaultMigration[] = [
   { filename: LEGACY_BASELINE_FILENAME, module: legacyBaseline },
@@ -182,4 +184,5 @@ export const DEFAULT_MIGRATIONS: readonly DefaultMigration[] = [
   { filename: ACTION_NEEDED_FILENAME, module: actionNeeded },
   { filename: KEY_WEIGHT_ORDER_FILENAME, module: keyWeightOrder },
   { filename: KEY_RATE_LIMITS_FILENAME, module: keyRateLimits },
+  { filename: KEY_METADATA_NOTIFICATIONS_FILENAME, module: keyMetadataNotifications },
 ];
