@@ -212,6 +212,24 @@ export interface ChainRow {
   profile_strategy?: string | null;
 }
 
+/** [fork 10/10] One candidate key's dry-run verdict: why it was skipped (the
+ *  first gate that rejected it), or `chosen` when it is the winner. */
+export interface DryRunDecision {
+  keyId: number;
+  keyLabel: string | null;
+  reasons: string[];
+  chosen?: boolean;
+}
+
+export interface DryRunResult {
+  modelString: string;
+  platform: string;
+  modelId: string;
+  chosenKeyId: number | null;
+  chosenKeyLabel: string | null;
+  candidates: DryRunDecision[];
+}
+
 export interface RouteResult {
   provider: BaseProvider;
   modelId: string;
@@ -1613,7 +1631,13 @@ function cachedDecrypt(keyId: number, ct: string, iv: string, authTag: string): 
   return plain;
 }
 
-function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: Set<string>, diag?: string[]): RouteResult | null {
+function selectKeyForModel(
+  entry: ChainRow,
+  estimatedTokens: number,
+  skipKeys?: Set<string>,
+  diag?: string[],
+  dryRun?: { explain: DryRunDecision[] },
+): RouteResult | null {
   const db = getDb();
   const label = `${entry.platform}/${entry.model_id}`;
 
@@ -1639,12 +1663,23 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
     return null;
   }
 
+  // [fork 10/10] Dry-run collector: one decision per candidate key, filled even
+  //  when every key is dropped by the pre-walk filters (scope / action-needed).
+  const explainMap = new Map<number, DryRunDecision>();
+  const flushExplain = () => { if (dryRun) dryRun.explain.push(...explainMap.values()); };
+
   // Scoped keys (#657) are dropped before the walk: a key whose model scope
   // excludes this model is not a candidate at all — it neither takes a
   // round-robin slot nor burns an attempt on a guaranteed 403. Parsed once per
   // key row.
   const scoped = allKeys.filter(k => scopeAllows(parseModelScope(k.model_scope_json), entry.model_id));
   if (scoped.length === 0) {
+    if (dryRun) {
+      for (const key of allKeys) {
+        explainMap.set(key.id, { keyId: key.id, keyLabel: key.label ?? null, reasons: ['model-scope'] });
+      }
+      flushExplain();
+    }
     diag?.push(`${label}: no usable key — ${allKeys.length} key(s) scoped to other models`);
     return null;
   }
@@ -1655,6 +1690,16 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
   const excluded = excludedKeyIds();
   const keys = excluded.size === 0 ? scoped : scoped.filter(k => !excluded.has(k.id));
   if (keys.length === 0) {
+    if (dryRun) {
+      for (const key of allKeys) {
+        if (!scoped.some(k => k.id === key.id)) {
+          explainMap.set(key.id, { keyId: key.id, keyLabel: key.label ?? null, reasons: ['model-scope'] });
+        } else {
+          explainMap.set(key.id, { keyId: key.id, keyLabel: key.label ?? null, reasons: ['action-needed'] });
+        }
+      }
+      flushExplain();
+    }
     diag?.push(`${label}: no usable key — ${scoped.length} key(s) need action on the provider site`);
     return null;
   }
@@ -1662,7 +1707,17 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
   // Tally the gate that rejected each key, so the exhaustion diagnostic can say
   // *why* a model with keys still couldn't serve (all on cooldown vs over quota).
   const skipTally: Record<string, number> = {};
-  const note = (reason: string) => { skipTally[reason] = (skipTally[reason] ?? 0) + 1; };
+  // Report keys dropped BEFORE the walk (scope / action-needed) so the dry-run
+  // shows every candidate and its reason, not just the ones the walk touched.
+  if (dryRun) {
+    for (const key of allKeys) {
+      if (!scoped.some(k => k.id === key.id)) {
+        explainMap.set(key.id, { keyId: key.id, keyLabel: key.label ?? null, reasons: ['model-scope'] });
+      } else if (!keys.some(k => k.id === key.id)) {
+        explainMap.set(key.id, { keyId: key.id, keyLabel: key.label ?? null, reasons: ['action-needed'] });
+      }
+    }
+  }
 
   const limits = {
     rpm: entry.rpm_limit,
@@ -1718,6 +1773,20 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
     for (let attempt = 0; attempt < keys.length; attempt++) {
       const key = ranked ? ranked[attempt] : keys[idx % keys.length];
       idx++;
+      // [fork 10/10] Dry-run bookkeeping: one decision row per key, with the
+      // gate that rejected it (or empty when it is the chosen key).
+      let explainEntry: DryRunDecision | undefined;
+      if (dryRun) {
+        explainEntry = explainMap.get(key.id);
+        if (!explainEntry) {
+          explainEntry = { keyId: key.id, keyLabel: key.label ?? null, reasons: [] };
+          explainMap.set(key.id, explainEntry);
+        }
+      }
+      const note = (reason: string) => {
+        skipTally[reason] = (skipTally[reason] ?? 0) + 1;
+        if (explainEntry && !explainEntry.reasons.includes(reason)) explainEntry.reasons.push(reason);
+      };
 
       if (endpointKeyIds && !endpointKeyIds.has(key.id)) { note('custom-key-mismatch'); continue; }
       // With explicit weighting the soft-cap discount is already folded into
@@ -1772,8 +1841,10 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
     try {
       decryptedKey = cachedDecrypt(key.id, key.encrypted_key, key.iv, key.auth_tag);
     } catch {
-      db.prepare("UPDATE api_keys SET status = 'error', last_checked_at = datetime('now') WHERE id = ?")
-        .run(key.id);
+      if (!dryRun) {
+        db.prepare("UPDATE api_keys SET status = 'error', last_checked_at = datetime('now') WHERE id = ?")
+          .run(key.id);
+      }
       note('decrypt-error');
       continue;
     }
@@ -1787,15 +1858,22 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
       : provider;
     if (!resolvedProvider) { note('no-resolved-provider'); continue; }
 
-    roundRobinIndex.set(rrKey, idx);
+    if (!dryRun) roundRobinIndex.set(rrKey, idx);
     // Taken only once the key has cleared every gate and is definitely being
     // returned, so a rejected candidate never consumes concurrency budget.
     const proxyUrl = decryptProxyUrl(key);
-    const budget = reserveMonthlyBudget(key.id, estimatedTokens);
-    if (!budget.allowed) { note('monthly-budget-cap'); continue; }
-    const capReserve = reserveKeyCaps(key.id, { estimatedTokens, modelId: entry.model_id });
-    if (!capReserve.allowed) { note('key-cap'); continue; }
-    const leaseId = acquireLease(entry.platform, entry.model_id, key.id, estimatedTokens);
+    let budget: { allowed: boolean; release?: () => void } = { allowed: true };
+    let capReserve: { allowed: boolean; release?: () => void } = { allowed: true };
+    let leaseRelease: (() => void) | undefined;
+    if (!dryRun) {
+      budget = reserveMonthlyBudget(key.id, estimatedTokens);
+      if (!budget.allowed) { note('monthly-budget-cap'); continue; }
+      capReserve = reserveKeyCaps(key.id, { estimatedTokens, modelId: entry.model_id });
+      if (!capReserve.allowed) { note('key-cap'); continue; }
+      const leaseId = acquireLease(entry.platform, entry.model_id, key.id, estimatedTokens);
+      leaseRelease = () => releaseLease(leaseId);
+    }
+    if (explainEntry) explainEntry.chosen = true;
     return {
       provider: resolvedProvider,
       modelId: entry.model_id,
@@ -1811,7 +1889,7 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
       endpointScope: entry.endpoint_scope ?? '',
       rpdLimit: limits.rpd,
       tpdLimit: limits.tpd,
-      release: () => { releaseLease(leaseId); budget.release(); capReserve.release(); },
+      release: () => { leaseRelease?.(); budget.release?.(); capReserve.release?.(); },
     };
     }
     return null;
@@ -1825,6 +1903,7 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
     const summary = Object.entries(skipTally).map(([r, n]) => `${r}:${n}`).join(', ') || 'no usable key';
     diag?.push(`${label}: ${keys.length} key(s) — ${summary}`);
   }
+  flushExplain();
   return selected;
 }
 
@@ -2284,6 +2363,41 @@ export function resolveFusionCandidate(modelId: string): FusionCandidate | null 
  *   global one. Set by the `auto:<axis>` aliases (ResolvedChain.strategyOverride,
  *   #1628); leave unset everywhere else.
  */
+/**
+ * [fork 10/10] Dry-run the key walk for a model: no leases, no budget/cap
+ * reservations, no rotation-cursor advance, no status writes. Returns the key
+ * selectKeyForModel WOULD have returned plus one decision row per candidate key
+ * with the first gate that rejected it — so tuning weights/caps stops being a
+ * guessing game.
+ */
+export function explainRouteForModel(modelString: string, estimatedTokens = 1000): DryRunResult {
+  const resolved = resolveRoutingChain(modelString);
+  const entry = resolved.chain[0];
+  if (!entry) {
+    return { modelString, platform: '', modelId: '', chosenKeyId: null, chosenKeyLabel: null, candidates: [] };
+  }
+
+  const explain: DryRunDecision[] = [];
+  const selected = selectKeyForModel(entry, estimatedTokens, undefined, undefined, { explain });
+  const winner = explain.find(decision => decision.chosen);
+
+  return {
+    modelString,
+    platform: entry.platform,
+    modelId: entry.model_id,
+    chosenKeyId: selected?.keyId ?? winner?.keyId ?? null,
+    chosenKeyLabel: selected?.keyLabel ?? winner?.keyLabel ?? null,
+    candidates: explainMapSequential(explain),
+  };
+}
+
+/** Drop duplicate map entries (a key walked in both soft passes) keeping the last. */
+function explainMapSequential(list: DryRunDecision[]): DryRunDecision[] {
+  const seen = new Map<number, DryRunDecision>();
+  for (const decision of list) seen.set(decision.keyId, decision);
+  return [...seen.values()];
+}
+
 export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, preferredModelDbId?: number, requireVision = false, requireTools = false, skipModels?: Set<number>, prefetchedChain?: ChainRow[], requireStructured = false, skipPlatforms?: Set<string>, exactOutputReserve = 0, task?: 'code' | 'chat', strategyOverride?: PresetStrategy): RouteResult {
   const db = getDb();
 

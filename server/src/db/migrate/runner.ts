@@ -109,6 +109,7 @@ async function runPendingMigrations(
   options: MigrationRunnerOptions,
 ): Promise<void> {
   const applied = getAppliedMigrations(db);
+  backupDbFileBeforeMigrations(db, records, applied);
 
   for (const record of records) {
     if (applied.has(record.filename)) continue;
@@ -155,6 +156,7 @@ function runPendingMigrationsSync(
   records: readonly MigrationRecord[],
 ): void {
   const applied = getAppliedMigrations(db);
+  backupDbFileBeforeMigrations(db, records, applied);
 
   for (const record of records) {
     if (applied.has(record.filename)) continue;
@@ -192,6 +194,30 @@ function runLatestDownMigrationSync(
   });
 
   revertMigration();
+}
+
+/** [fork 10/10] Copy the live file before its first migration of the boot, so a
+ *  bad migration is a rename away from undo. No-op for :memory: and when nothing
+ *  is pending. Self-contained (no services/backups import) to avoid a circular
+ *  require through db/index. */
+function backupDbFileBeforeMigrations(
+  db: Db,
+  records: readonly MigrationRecord[],
+  applied: Map<string, string>,
+): void {
+  const pending = records.filter(record => !applied.has(record.filename));
+  if (pending.length === 0) return;
+  const dbName = (db as unknown as { name?: string }).name;
+  if (!dbName || dbName === ':memory:') return;
+  try {
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
+    const backup = `${dbName}.pre-migration-${stamp}.bak`;
+    fs.copyFileSync(dbName, backup, fs.constants.COPYFILE_EXCL);
+    console.log(`[migrations] ${pending.length} pending — backing up to ${backup}`);
+  } catch (err) {
+    // Never block the boot on a backup: a failed copy is logged, not fatal.
+    console.error('[migrations] pre-migration backup failed:', err);
+  }
 }
 
 function getAppliedMigrations(db: Db): Map<string, string> {

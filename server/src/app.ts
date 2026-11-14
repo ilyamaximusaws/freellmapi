@@ -23,6 +23,9 @@ import { healthRouter } from './routes/health.js';
 import { freeTierRouter } from './routes/free-tier.js';
 import { settingsRouter } from './routes/settings.js';
 import { notificationsRouter } from './routes/notifications.js';
+import { auditRouter } from './routes/audit.js';
+import { configRouter } from './routes/config.js';
+import { routerDiagnosticsRouter } from './routes/router-diagnostics.js';
 import { premiumRouter } from './routes/premium.js';
 import { backupsRouter } from './routes/backups.js';
 import { cacheRouter } from './routes/cache.js';
@@ -37,6 +40,7 @@ import { urlTokenRouter } from './routes/url-tokens.js';
 import { updateRouter } from './routes/update.js';
 import { moderationRouter } from './routes/moderation.js';
 import { requireAuth } from './middleware/requireAuth.js';
+import { auditMiddleware } from './middleware/audit.js';
 import { createHostGuard } from './middleware/allowed-hosts.js';
 import { createProxyRateLimiter, createAdminRateLimiter } from './middleware/rateLimit.js';
 
@@ -245,6 +249,10 @@ export function createApp(config?: Config) {
   // the Ollama /api/* mount above, which carries its own proxy limiter.
   const adminRateLimiter = createAdminRateLimiter();
   app.use('/api', adminRateLimiter);
+  // [fork 10/10] Every mutating /api call lands in the audit log. Mounted once
+  // for the whole surface; it records on response finish so the per-route
+  // requireAuth has already set req.user by the time we read the actor.
+  app.use('/api', auditMiddleware);
 
   // Dashboard auth (#35): /api/auth/{status,setup,login} bootstrap without a
   // session; everything else under /api/* requires a logged-in dashboard user.
@@ -289,6 +297,9 @@ export function createApp(config?: Config) {
   app.use('/api/free-tier', requireAuth, freeTierRouter);
   app.use('/api/settings', requireAuth, settingsRouter);
   app.use('/api/notifications', requireAuth, notificationsRouter);
+  app.use('/api/audit', requireAuth, auditRouter);
+  app.use('/api/config', requireAuth, configRouter);
+  app.use('/api/router', requireAuth, routerDiagnosticsRouter);
   app.use('/api/premium', requireAuth, premiumRouter);
   // Database dumps and restores. Dashboard-session gated: the dump files carry
   // encrypted provider keys and every routing setting, so the unified /v1 key

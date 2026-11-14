@@ -61,6 +61,7 @@ const ACTION_NEEDED_FILENAME = '20261114_000004_action_needed.ts';
 const KEY_WEIGHT_ORDER_FILENAME = '20261114_000005_key_weight_order.ts';
 const KEY_RATE_LIMITS_FILENAME = '20261114_000006_key_rate_limits.ts';
 const KEY_METADATA_NOTIFICATIONS_FILENAME = '20261114_000007_key_metadata_notifications.ts';
+const AUDIT_LOG_FILENAME = '20261114_000008_audit_log.ts';
 
 interface SchemaRow {
   type: string;
@@ -169,6 +170,7 @@ describe('migration round trip', () => {
         KEY_WEIGHT_ORDER_FILENAME,
         KEY_RATE_LIMITS_FILENAME,
         KEY_METADATA_NOTIFICATIONS_FILENAME,
+        AUDIT_LOG_FILENAME,
       ]);
     } finally {
       db.close();

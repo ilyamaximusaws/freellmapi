@@ -32,6 +32,7 @@ import {
 import {
   getKeyMetadata, setKeyMetadata, tagSummary, bulkApplyToTag,
 } from '../services/key-metadata.js';
+import { recordAudit } from '../services/audit-log.js';
 import { resolveCustomEndpointKey, customEndpointKeyIds, siblingEndpointKeyId, endpointHasCredential, normalizeGroupLabel, setCustomEndpointGroup } from '../services/custom-endpoint.js';
 import { registerCustomModels, registerCustomChatModels } from '../services/custom-model-register.js';
 import { registerCustomMediaModel } from '../services/custom-media-register.js';
@@ -2005,6 +2006,14 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
   }
 
   const { enabled, label, modelScope, proxyUrl, key, monthlyRequestCap, monthlyTokenCap, groupLabel, maxConcurrent, weight, order, rpm, tpm, rpd, owner, consoleUrl, note, tags, keyType, creditsRemaining, expiresAt, expireReminderDays } = parsed.data;
+  // [fork 10/10] Snapshot the columns we may change so the audit row can carry
+  // the OLD value next to the new one (the generic middleware only has the new).
+  const beforeAudit = getDb().prepare(`
+    SELECT enabled, label, weight, key_order, rpm_limit, tpm_limit, rpd_limit,
+           monthly_request_cap, monthly_token_cap, max_concurrent, owner, note,
+           key_type, credits_remaining, expires_at, expire_reminder_days, tags
+      FROM api_keys WHERE id = ?
+  `).get(id) as Record<string, unknown> | undefined;
   const updates: string[] = [];
   const values: (string | number | null)[] = [];
   let changedKey: string | undefined;
@@ -2152,6 +2161,34 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
   }
 
   const response: Record<string, unknown> = { success: true };
+  // [fork 10/10] Field-level audit diff: old value (from the pre-update snapshot)
+  // and new value (from the parsed body), one row per changed field, so the
+  // dashboard can show "who turned this key off" with both sides.
+  if (beforeAudit) {
+    const auditField = (column: string, oldValue: unknown, newValue: unknown) => {
+      if (String(oldValue ?? '') !== String(newValue ?? '')) {
+        recordAudit({ actor: (req as Request & { user?: { email?: string } }).user?.email, entityType: 'api_keys', entityId: id, action: 'update', field: column, oldValue, newValue });
+      }
+    };
+    if (enabled !== undefined) auditField('enabled', beforeAudit.enabled, enabled ? 1 : 0);
+    if (label !== undefined) auditField('label', beforeAudit.label, label);
+    if (weight !== undefined) auditField('weight', beforeAudit.weight, weight);
+    if (order !== undefined) auditField('key_order', beforeAudit.key_order, order);
+    if (rpm !== undefined) auditField('rpm_limit', beforeAudit.rpm_limit, rpm === 0 ? null : rpm);
+    if (tpm !== undefined) auditField('tpm_limit', beforeAudit.tpm_limit, tpm === 0 ? null : tpm);
+    if (rpd !== undefined) auditField('rpd_limit', beforeAudit.rpd_limit, rpd === 0 ? null : rpd);
+    if (monthlyRequestCap !== undefined) auditField('monthly_request_cap', beforeAudit.monthly_request_cap, monthlyRequestCap);
+    if (monthlyTokenCap !== undefined) auditField('monthly_token_cap', beforeAudit.monthly_token_cap, monthlyTokenCap);
+    if (maxConcurrent !== undefined) auditField('max_concurrent', beforeAudit.max_concurrent, maxConcurrent);
+    if (owner !== undefined) auditField('owner', beforeAudit.owner, owner);
+    if (note !== undefined) auditField('note', beforeAudit.note, note);
+    if (keyType !== undefined) auditField('key_type', beforeAudit.key_type, keyType);
+    if (creditsRemaining !== undefined) auditField('credits_remaining', beforeAudit.credits_remaining, creditsRemaining);
+    if (expiresAt !== undefined) auditField('expires_at', beforeAudit.expires_at, expiresAt);
+    if (expireReminderDays !== undefined) auditField('expire_reminder_days', beforeAudit.expire_reminder_days, expireReminderDays);
+    if (tags !== undefined) auditField('tags', beforeAudit.tags, tags != null ? JSON.stringify(tags) : null);
+  }
+
   if (enabled !== undefined) response.enabled = enabled;
   if (label !== undefined) response.label = label;
   if (proxyUrl !== undefined) response.maskedProxyUrl = maskProxyUrl(proxyUrl);
