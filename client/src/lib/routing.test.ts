@@ -179,7 +179,7 @@ describe('pre-#651 split overrides stay undoable', () => {
 // group number follows the BEST member. Taking the worst member painted a
 // five-provider group red the moment one provider ran dry.
 
-function usageRow(modelDbId: number, w: Partial<Pick<RateLimitUsageRow, 'rpm' | 'rpd' | 'tpm'>> = {}): RateLimitUsageRow {
+function usageRow(modelDbId: number, w: Partial<Pick<RateLimitUsageRow, 'rpm' | 'rpd' | 'tpm' | 'monthly'>> = {}): RateLimitUsageRow {
   return {
     modelDbId,
     platform: 'p' + modelDbId,
@@ -187,6 +187,7 @@ function usageRow(modelDbId: number, w: Partial<Pick<RateLimitUsageRow, 'rpm' | 
     rpm: w.rpm ?? null,
     rpd: w.rpd ?? null,
     tpm: w.tpm ?? null,
+    monthly: w.monthly ?? null,
   }
 }
 

@@ -29,17 +29,28 @@ async function get(app: Express, path: string) {
   return { status: res.status, body };
 }
 
-function addKey(label: string, opts: { enabled?: number; status?: string; scope?: string[] | null } = {}): number {
+function addKey(label: string, opts: {
+  enabled?: number;
+  status?: string;
+  scope?: string[] | null;
+  rpm?: number;
+  tpm?: number;
+  rpd?: number;
+} = {}): number {
   const db = getDb();
   const secret = encrypt(`secret-${label}`);
   const info = db.prepare(`
-    INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled, model_scope_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled, model_scope_json,
+                          rpm_limit, tpm_limit, rpd_limit)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     PLATFORM, label, secret.encrypted, secret.iv, secret.authTag,
     opts.status ?? 'healthy',
     opts.enabled ?? 1,
     opts.scope ? JSON.stringify(opts.scope) : null,
+    opts.rpm ?? null,
+    opts.tpm ?? null,
+    opts.rpd ?? null,
   );
   return Number(info.lastInsertRowid);
 }
@@ -151,5 +162,43 @@ describe('GET /api/fallback/rate-limit-usage', () => {
     expect(row.platform).toBe(PLATFORM);
     expect(row.rpd).toBeNull();
     expect(row.tpm).toBeNull();
+  });
+
+  describe('monthly capacity [fork 7/10 follow-up]', () => {
+    it('is null when no key sets any RPM/TPM/RPD limit', async () => {
+      addKey('unlimited');
+      const row = await probeRow(app);
+      expect(row.monthly).toBeNull();
+    });
+
+    it('converts each key window to a month and sums the pool', async () => {
+      // 30 req/min over 30 days, on two keys that can both serve.
+      addKey('a', { rpm: 30 });
+      addKey('b', { rpm: 30 });
+      const row = await probeRow(app);
+      expect(row.monthly).toEqual({ requests: 2 * 30 * 60 * 24 * 30, tokens: null });
+    });
+
+    it('lets the tighter of RPM and RPD bound a key\u2019s monthly requests', async () => {
+      // rpm would allow 2.59M/month, rpd only 30k — rpd is the binding window.
+      addKey('a', { rpm: 60, rpd: 1000 });
+      const row = await probeRow(app);
+      expect(row.monthly).toEqual({ requests: 1000 * 30, tokens: null });
+    });
+
+    it('converts TPM to monthly tokens', async () => {
+      addKey('a', { tpm: 1000 });
+      const row = await probeRow(app);
+      expect(row.monthly).toEqual({ requests: null, tokens: 1000 * 60 * 24 * 30 });
+    });
+
+    it('ignores keys the router cannot reach', async () => {
+      addKey('disabled', { enabled: 0, rpm: 30 });
+      addKey('errored', { status: 'error', rpm: 30 });
+      addKey('scoped-elsewhere', { scope: ['some-other-model'], rpm: 30 });
+      addKey('usable', { rpm: 30 });
+      const row = await probeRow(app);
+      expect(row.monthly).toEqual({ requests: 30 * 60 * 24 * 30, tokens: null });
+    });
   });
 });

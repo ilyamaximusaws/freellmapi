@@ -577,6 +577,9 @@ fallbackRouter.get('/token-usage', (_req: Request, res: Response) => {
 // page is a single grouped scan of `rate_limit_usage` over the last day.
 const RATE_LIMIT_MINUTE_MS = 60 * 1000;
 const RATE_LIMIT_DAY_MS = 24 * 60 * RATE_LIMIT_MINUTE_MS;
+// Window-to-month conversion used for the router's monthly capacity estimate.
+const MINUTES_PER_MONTH = 60 * 24 * 30;
+const DAYS_PER_MONTH = 30;
 
 interface KeyUsage { rpm: number; rpd: number; tpm: number }
 const NO_USAGE: KeyUsage = { rpm: 0, rpd: 0, tpm: 0 };
@@ -622,7 +625,9 @@ fallbackRouter.get('/rate-limit-usage', (_req: Request, res: Response) => {
   // custom-endpoint pool is keyed on base_url and has to resolve a model's own
   // key_id even when that row is disabled.
   const allKeys = db.prepare(`
-    SELECT id, platform, base_url, model_scope_json, enabled, status FROM api_keys
+    SELECT id, platform, base_url, model_scope_json, enabled, status,
+           rpm_limit, tpm_limit, rpd_limit
+      FROM api_keys
   `).all() as Array<{
     id: number;
     platform: string;
@@ -630,14 +635,24 @@ fallbackRouter.get('/rate-limit-usage', (_req: Request, res: Response) => {
     model_scope_json: string | null;
     enabled: number;
     status: string;
+    rpm_limit: number | null;
+    tpm_limit: number | null;
+    rpd_limit: number | null;
   }>;
 
   const baseUrlByKeyId = new Map(allKeys.map(k => [k.id, k.base_url]));
-  const routableByPlatform = new Map<string, Array<{ id: number; baseUrl: string | null; scope: Set<string> | null }>>();
+  const routableByPlatform = new Map<string, Array<{ id: number; baseUrl: string | null; scope: Set<string> | null; rpm: number | null; tpm: number | null; rpd: number | null }>>();
   for (const k of allKeys) {
     if (k.enabled !== 1 || (k.status !== 'healthy' && k.status !== 'unknown')) continue;
     const list = routableByPlatform.get(k.platform) ?? [];
-    list.push({ id: k.id, baseUrl: k.base_url, scope: parseModelScope(k.model_scope_json) });
+    list.push({
+      id: k.id,
+      baseUrl: k.base_url,
+      scope: parseModelScope(k.model_scope_json),
+      rpm: k.rpm_limit,
+      tpm: k.tpm_limit,
+      rpd: k.rpd_limit,
+    });
     routableByPlatform.set(k.platform, list);
   }
 
@@ -675,6 +690,15 @@ fallbackRouter.get('/rate-limit-usage', (_req: Request, res: Response) => {
 
     let best: KeyUsage | null = null;
     let bestPressure = Infinity;
+    // Monthly capacity of this router ([fork 7/10 follow-up]): every key that
+    // can serve the model contributes its own ceiling. The per-minute (RPM) and
+    // per-day (RPD) windows both bound monthly requests — the tighter one wins;
+    // an unset window does not bind. Per-minute tokens bound monthly tokens.
+    // Summed across the pool because all of those keys can serve.
+    let monthlyRequests = 0;
+    let monthlyTokens = 0;
+    let hasRequestCap = false;
+    let hasTokenCap = false;
     for (const k of pool) {
       if (!scopeAllows(k.scope, m.model_id)) continue;
       if (m.platform === 'custom' && m.key_id != null) {
@@ -686,12 +710,27 @@ fallbackRouter.get('/rate-limit-usage', (_req: Request, res: Response) => {
         bestPressure = pressure;
         best = usage;
       }
+      const reqBounds = [
+        k.rpm != null ? k.rpm * MINUTES_PER_MONTH : null,
+        k.rpd != null ? k.rpd * DAYS_PER_MONTH : null,
+      ].filter((v): v is number => v != null);
+      if (reqBounds.length > 0) {
+        monthlyRequests += Math.min(...reqBounds);
+        hasRequestCap = true;
+      }
+      if (k.tpm != null) {
+        monthlyTokens += k.tpm * MINUTES_PER_MONTH;
+        hasTokenCap = true;
+      }
     }
+    const monthly = hasRequestCap || hasTokenCap
+      ? { requests: hasRequestCap ? monthlyRequests : null, tokens: hasTokenCap ? monthlyTokens : null }
+      : null;
 
     // No routable key at all: the model cannot be served, and a usage number
     // would be fiction. Report no windows so the dashboard shows no badge.
     if (!best) {
-      return { modelDbId: m.model_db_id, platform: m.platform, modelId: m.model_id, rpm: null, rpd: null, tpm: null };
+      return { modelDbId: m.model_db_id, platform: m.platform, modelId: m.model_id, rpm: null, rpd: null, tpm: null, monthly };
     }
     return {
       modelDbId: m.model_db_id,
@@ -700,6 +739,7 @@ fallbackRouter.get('/rate-limit-usage', (_req: Request, res: Response) => {
       rpm: m.rpm_limit != null ? { used: best.rpm, limit: m.rpm_limit } : null,
       rpd: m.rpd_limit != null ? { used: best.rpd, limit: m.rpd_limit } : null,
       tpm: m.tpm_limit != null ? { used: best.tpm, limit: m.tpm_limit } : null,
+      monthly,
     };
   });
 

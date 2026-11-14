@@ -344,6 +344,10 @@ export interface RateLimitUsageRow {
   rpm: RateLimitWindow | null
   rpd: RateLimitWindow | null
   tpm: RateLimitWindow | null
+  /** [fork 7/10 follow-up] Monthly capacity of the router, derived from the
+   *  keys' own RPM/TPM/RPD limits and summed across every key that can serve
+   *  the model. Null when no key in the pool sets any of them. */
+  monthly: { requests: number | null; tokens: number | null } | null
 }
 
 export interface RateLimitUsageData {

@@ -9,6 +9,7 @@ import { Tooltip } from '@/components/tooltip'
 import {
   cleanQuotaLabel,
   formatContext,
+  formatTokens,
   groupMaxContext,
   groupQuotaBadge,
   isGroupDepleted,
@@ -151,6 +152,37 @@ export function RateLimitBadge({ rows, size = 'sm' }: { rows: RateLimitUsageRow[
   return (
     <span title={t('models.rateLimitUsageTitle')} className={`rounded-full tabular-nums ${scale} ${tone}`}>
       {t('models.rateLimitUsage', { kind: tightest.kind, used: tightest.used, limit: tightest.limit })}
+    </span>
+  )
+}
+
+// [fork 7/10 follow-up] The router's monthly ceiling: the per-key RPM/TPM/RPD
+// limits the user entered, converted to a month and summed across every key
+// that can serve the model. Estimated, so it is prefixed with an approximation.
+export function MonthlyCapBadge({ rows }: { rows: RateLimitUsageRow[] }) {
+  const { t } = useI18n()
+  let requests = 0
+  let tokens = 0
+  let hasRequests = false
+  let hasTokens = false
+  for (const row of rows) {
+    if (!row.monthly) continue
+    if (row.monthly.requests != null) {
+      requests += row.monthly.requests
+      hasRequests = true
+    }
+    if (row.monthly.tokens != null) {
+      tokens += row.monthly.tokens
+      hasTokens = true
+    }
+  }
+  if (!hasRequests && !hasTokens) return null
+  const parts: string[] = []
+  if (hasRequests) parts.push(t('models.monthlyCapRequests', { count: formatTokens(requests) }))
+  if (hasTokens) parts.push(t('models.monthlyCapTokens', { count: formatTokens(tokens) }))
+  return (
+    <span title={t('models.monthlyCapTitle')} className="text-[10px] rounded-full px-1.5 py-0.5 bg-muted text-muted-foreground tabular-nums">
+      ≈{parts.join(' · ')}
     </span>
   )
 }
@@ -413,6 +445,7 @@ export function GroupHeaderCells({ group, rank, dragHandle, editableRank, onMove
               </span>
             )}
             <RateLimitBadge rows={rateRows} />
+            <MonthlyCapBadge rows={rateRows} />
             {maxCtx > 0 && (
               <span title={t('models.ctxTitle')} className="text-[10px] rounded-full px-1.5 py-0.5 bg-muted text-muted-foreground tabular-nums">
                 {t('models.ctxBadge', { size: formatContext(maxCtx) })}
