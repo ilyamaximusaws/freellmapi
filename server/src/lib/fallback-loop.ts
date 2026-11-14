@@ -19,6 +19,7 @@ import { benchCloudflareAccount } from '../services/cloudflare-daily-quota.js';
 
 import type { RouteResult } from '../services/router.js';
 import { recordRateLimitHit, recordModelFailure, recordSuccess, hasOtherUsableKey, routableKeyIdsForModel, formatResetEta, isProviderMomentAttributionEnabled } from '../services/router.js';
+import { detectAction, noteKeySuccess } from '../services/action-needed.js';
 import { safeHeaderValue } from './header-value.js';
 import {
   recordRequest,
@@ -574,6 +575,15 @@ export function recordRetryableFailure(route: RouteResult, err: any, state: Fall
   if (consumeSkipBenchExemption(route, err)) return true;
   const decision = cooldownDecisionForError(route, err);
   setCooldown(route.platform, route.modelId, route.keyId, decision.durationMs, decision.source);
+  // [fork 5/10] A 401/402/403 whose body names a fixable condition (verify your
+  // phone, accept the new terms, add a card, claim the daily bonus) is not a
+  // dead credential — it is a key waiting for a human. Flag it so the dashboard
+  // can say what to do instead of showing a generic auth failure, and so the
+  // router can stop burning attempts on it.
+  const errStatus = Number(err?.status);
+  if (Number.isFinite(errStatus)) {
+    detectAction(route.keyId, errStatus, String(err?.message ?? ''));
+  }
   // Workers AI's daily neurons pool is per ACCOUNT: bench every model on every
   // token of the same account with this route's own duration and provenance.
   if (route.platform === 'cloudflare') benchCloudflareAccount(route.apiKey, err, decision.durationMs, decision.source);
@@ -734,6 +744,10 @@ export function recordUpstreamSuccess(route: RouteResult, rateLimitTokens: numbe
   // any stale 'error' status left by an earlier transport blip instead of waiting
   // for the next health pass to make the key routable again.
   markKeyHealthyFromRequest(route.keyId);
+  // [fork 5/10] The key just worked, so whatever the operator had to do on the
+  // provider site is done: clear a one-shot action flag without waiting for
+  // someone to press "done". Recurring flags keep their schedule.
+  noteKeySuccess(route.keyId);
 }
 
 // ── Attempt trail ─────────────────────────────────────────────────────────────

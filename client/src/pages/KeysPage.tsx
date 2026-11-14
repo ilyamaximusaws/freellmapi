@@ -18,6 +18,7 @@ import { BackupsSection } from '@/components/keys/backups-section'
 import { AnthropicSection } from '@/components/keys/anthropic-section'
 import { ProviderList } from '@/components/keys/provider-list'
 import { ProviderChecklistSection } from '@/components/keys/provider-checklist-section'
+import { ActionNeededSection } from '@/components/keys/action-needed-section'
 import { AddKeyDialog } from '@/components/keys/add-key-dialog'
 import { ExportKeysDialog } from '@/components/keys/export-keys-dialog'
 import { AgentCompatibilitySection } from '@/components/keys/agent-compatibility-section'
@@ -131,6 +132,9 @@ export default function KeysPage() {
 
         {tab === 'providers' && (
           <>
+            {/* [fork 5/10] Keys whose provider wants a human: verify, accept
+                terms, claim the daily bonus. Renders nothing when none do. */}
+            <ActionNeededSection />
             <ProviderChecklistSection onAddKey={platform => openAddKey(platform as Platform)} />
             <ProviderList onAddKey={() => openAddKey()} />
           </>

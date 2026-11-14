@@ -31,6 +31,7 @@ import {
 import { TIMEOUT_ERROR_MARKERS, isProviderMomentFailure } from '../lib/error-classify.js';
 import { checkMonthlyBudget, reserveMonthlyBudget } from './key-budget.js';
 import { checkKeyCaps, reserveKeyCaps, isCapSoftPressured } from './key-caps.js';
+import { excludedKeyIds } from './action-needed.js';
 import { cloudflareNeuronsAvailable } from './cloudflare-neurons.js';
 import { applyModelWeightOverride, getModelWeightOverrides } from './model-weight-overrides.js';
 import { modelsWithOverriddenField, getCatalogModelTombstone } from './model-state.js';
@@ -108,6 +109,9 @@ export function summarizeExhaustion(
   for (const line of diag) {
     const l = line.toLowerCase();
     if (l.includes('no provider registered')) bump('unsupported provider');
+    // [fork 5/10] Distinct bucket: a flagged key is not "no key configured" —
+    // the operator has one, and the fix is on the provider's site.
+    else if (l.includes('need action on the provider site')) bump('key needs action on the provider site');
     else if (/no enabled\+healthy key|no usable key|decrypt-error/.test(l)) bump('no usable key configured');
     else if (l.includes('< estimated')) bump('prompt too large for the model');
     else if (l.includes('no vision support')) bump('model lacks vision');
@@ -119,6 +123,7 @@ export function summarizeExhaustion(
   }
   // Most actionable buckets first.
   const order = [
+    'key needs action on the provider site',
     'rate-limited or on cooldown',
     'no usable key configured',
     'prompt too large for the model',
@@ -1629,9 +1634,19 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
   // excludes this model is not a candidate at all — it neither takes a
   // round-robin slot nor burns an attempt on a guaranteed 403. Parsed once per
   // key row.
-  const keys = allKeys.filter(k => scopeAllows(parseModelScope(k.model_scope_json), entry.model_id));
-  if (keys.length === 0) {
+  const scoped = allKeys.filter(k => scopeAllows(parseModelScope(k.model_scope_json), entry.model_id));
+  if (scoped.length === 0) {
     diag?.push(`${label}: no usable key — ${allKeys.length} key(s) scoped to other models`);
+    return null;
+  }
+
+  // [fork 5/10] Keys flagged "action needed" with policy exclude_from_rotation
+  // are dropped here, before the walk: they are valid credentials that cannot
+  // work until a human visits the provider, so trying them only burns attempts.
+  const excluded = excludedKeyIds();
+  const keys = excluded.size === 0 ? scoped : scoped.filter(k => !excluded.has(k.id));
+  if (keys.length === 0) {
+    diag?.push(`${label}: no usable key — ${scoped.length} key(s) need action on the provider site`);
     return null;
   }
 

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, NavLink, Link, useLocation, useNavigate } from 'react-router-dom'
-import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MutationCache, QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { ChevronDown, KeyRound, LogOut, Menu, MoreHorizontal, RefreshCw, Search, Settings, Sparkles } from 'lucide-react'
 import { buttonVariants } from '@/components/ui/button'
 import {
@@ -26,7 +26,7 @@ import { UpdateReminder } from '@/components/update-reminder'
 import { NewBuildPrompt } from '@/components/new-build-prompt'
 import { usePremium } from '@/hooks/use-premium'
 import { I18nProvider, useI18n } from '@/i18n'
-import { logout } from '@/lib/api'
+import { apiFetch, logout } from '@/lib/api'
 import { toast } from '@/lib/toast'
 import { ThemeProvider } from '@/theme'
 import KeysPage from '@/pages/KeysPage'
@@ -121,7 +121,7 @@ const navMenus: Record<
 
 const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
 
-function NavItem({ to, children }: { to: string; children: React.ReactNode }) {
+function NavItem({ to, children, badge }: { to: string; children: React.ReactNode; badge?: number }) {
   return (
     <NavLink
       to={to}
@@ -133,9 +133,31 @@ function NavItem({ to, children }: { to: string; children: React.ReactNode }) {
         }`
       }
     >
-      {children}
+      <span className="inline-flex items-center gap-1.5">
+        {children}
+        {/* [fork 5/10] Keys waiting on a human action (verify, terms, claim). */}
+        {badge ? (
+          <span className="inline-flex min-w-4 items-center justify-center rounded-full bg-amber-500/20 px-1.5 text-[10px] font-medium leading-4 text-amber-600 dark:text-amber-400">
+            {badge}
+          </span>
+        ) : null}
+      </span>
     </NavLink>
   )
+}
+
+/**
+ * How many keys are waiting on a manual action on the provider's site. Polled
+ * slowly: it is a badge, and a flag raised by a failed request is already
+ * visible on the Keys page by the time anyone looks at the nav.
+ */
+function useActionNeededCount(): number {
+  const { data } = useQuery<{ summary: { total: number } }>({
+    queryKey: ['action-needed', 'count'],
+    queryFn: () => apiFetch('/api/keys/action-needed'),
+    refetchInterval: 60000,
+  })
+  return data?.summary.total ?? 0
 }
 
 function Brand() {
@@ -242,6 +264,7 @@ function Navbar() {
   const { t } = useI18n()
   const location = useLocation()
   const navigate = useNavigate()
+  const actionNeededCount = useActionNeededCount()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [updatesOpen, setUpdatesOpen] = useState(false)
   // The update pill lives outside the navbar; it asks for this dialog by event.
@@ -298,7 +321,11 @@ function Navbar() {
                   </DropdownMenu>
                 </div>
               ) : (
-                <NavItem key={item.to} to={item.to}>
+                <NavItem
+                  key={item.to}
+                  to={item.to}
+                  badge={item.to === '/keys' ? actionNeededCount : undefined}
+                >
                   {t(item.labelKey)}
                 </NavItem>
               )

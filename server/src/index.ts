@@ -2,6 +2,7 @@ import './env.js';
 import { createApp } from './app.js';
 import { initDb, getDb } from './db/index.js';
 import { startHealthChecker, checkAllKeys } from './services/health.js';
+import { startActionScheduler } from './services/action-scheduler.js';
 import { restoreProxySettings, flushProxyCache } from './lib/proxy.js';
 import { startWakeDetect } from './lib/wake-detect.js';
 import { startCatalogSync } from './services/catalog-sync.js';
@@ -90,6 +91,9 @@ async function main() {
     startBackupScheduler(scheduler);
     startCustomModelSync(getDb(), scheduler);
     startBuiltinModelDiscovery(getDb(), scheduler);
+    // [fork 5/10] Recurring "action needed" flags (the daily claim) come back on
+    // their own schedule instead of relying on the operator to remember.
+    startActionScheduler(scheduler);
 
     // Post-sleep recovery: while the host was suspended (laptop lid, VM
     // pause) timers and keep-alive sockets froze, so the first requests after

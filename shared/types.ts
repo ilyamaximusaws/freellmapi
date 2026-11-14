@@ -383,6 +383,24 @@ export interface ApiKeyCooldown {
   remainingMs: number;
 }
 
+/** [fork 5/10] A key whose credential works but which needs a manual step on
+ *  the provider's site before it can serve. */
+export interface KeyActionNeeded {
+  id: number;
+  reason: 'verify_phone' | 'accept_tos' | 'add_card' | 'captcha' | 'trial_expired' | 'daily_claim' | 'rotate_key' | 'other';
+  url: string | null;
+  note: string | null;
+  /** exclude_from_rotation = the router skips this key until it is done. */
+  policy: 'inform_only' | 'exclude_from_rotation';
+  source: 'manual' | 'auto';
+  createdAt: string;
+  snoozeUntilMs: number | null;
+  recurrenceKind: 'none' | 'interval' | 'daily';
+  recurrenceHours: number | null;
+  recurrenceHour: number | null;
+  timezone: string;
+}
+
 /** [fork 4/10] One windowed cap with its current usage. */
 export interface KeyCapStatus {
   id: number;
@@ -451,6 +469,13 @@ export interface ApiKey {
   /** [fork 4/10] Windowed caps visible on this key (its own + account-wide),
    *  with live usage and the next reset. */
   caps?: KeyCapStatus[];
+  /** [fork 5/10] The provider is waiting for something a human must do (verify
+   *  a phone, accept terms, claim the daily bonus). null = nothing to do, or the
+   *  flag is snoozed. */
+  actionNeeded?: KeyActionNeeded | null;
+  /** Set when a flag exists but is snoozed until this epoch ms (so the row can
+   *  say "snoozed" instead of looking clean). */
+  actionNeededSnoozedUntilMs?: number | null;
   /** The per-key proxy override with its password masked (#590); '' = none. */
   maskedProxyUrl?: string;
   models?: ApiKeyModel[];

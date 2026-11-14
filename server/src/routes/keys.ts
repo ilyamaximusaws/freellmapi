@@ -18,6 +18,11 @@ import {
   CAP_WINDOWS, CAP_UNITS, DEFAULT_SOFT_PERCENT,
 } from '../services/key-caps.js';
 import type { CapWindow, CapUnit } from '../services/key-caps.js';
+import {
+  raiseAction, getAction, clearAction, snoozeAction, listActions, actionSummary,
+  listActionRules, createActionRule, updateActionRule, deleteActionRule,
+  ACTION_REASONS, ACTION_POLICIES, RECURRENCE_KINDS, DEFAULT_SNOOZE_HOURS,
+} from '../services/action-needed.js';
 import { resolveCustomEndpointKey, customEndpointKeyIds, siblingEndpointKeyId, endpointHasCredential, normalizeGroupLabel, setCustomEndpointGroup } from '../services/custom-endpoint.js';
 import { registerCustomModels, registerCustomChatModels } from '../services/custom-model-register.js';
 import { registerCustomMediaModel } from '../services/custom-media-register.js';
@@ -485,6 +490,9 @@ keysRouter.get('/', (_req: Request, res: Response) => {
     // Windowed caps + account grouping [fork 4/10], with live usage and the
     // next reset so the dashboard can show "X of Y, resets at …".
     const capSummary = getKeyCapSummary(Number(row.id));
+    // [fork 5/10] A key waiting on a human (verify phone, accept terms, daily
+    // claim) says so on the row instead of looking like a generic auth failure.
+    const action = getAction(Number(row.id));
     // Usage alongside the caps so the dashboard can show "342 of 1,000 this
     // month" instead of only the cap (OpenRouter's GET /api/v1/key returns
     // limit_remaining for the same reason).
@@ -501,6 +509,23 @@ keysRouter.get('/', (_req: Request, res: Response) => {
       monthlyRequestCap: budgetCaps.requestCap,
       accountKey: capSummary.accountKey,
       caps: capSummary.caps,
+      actionNeeded: action && !(action.snoozedUntilMs != null && action.snoozedUntilMs > Date.now())
+        ? {
+            id: action.id,
+            reason: action.reason,
+            url: action.url,
+            note: action.note,
+            policy: action.policy,
+            source: action.source,
+            createdAt: action.createdAt,
+            snoozeUntilMs: action.snoozedUntilMs,
+            recurrenceKind: action.recurrenceKind,
+            recurrenceHours: action.recurrenceHours,
+            recurrenceHour: action.recurrenceHour,
+            timezone: action.timezone,
+          }
+        : null,
+      actionNeededSnoozedUntilMs: action?.snoozedUntilMs ?? null,
       monthlyTokenCap: budgetCaps.tokenCap,
       // Per-key in-flight cap ([fork 2/10]): raw column + the value actually
       // enforced after the key/platform/global/setting precedence chain.
@@ -2058,6 +2083,150 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
   if (modelScope !== undefined) response.modelScope = scopeIds.length > 0 ? scopeIds : null;
   if (groupLabel !== undefined) response.groupLabel = normalizeGroupLabel(groupLabel);
   res.json(response);
+});
+
+// ── Action needed [fork 5/10] ───────────────────────────────────────────────
+// A flag on a key whose credential is fine but which cannot serve until a human
+// does something on the provider's site. `exclude_from_rotation` takes the key
+// out of routing; `inform_only` only surfaces it.
+
+const actionRaiseSchema = z.object({
+  reason: z.enum(ACTION_REASONS as unknown as [string, ...string[]]),
+  url: z.string().trim().max(500).nullable().optional(),
+  note: z.string().trim().max(1000).nullable().optional(),
+  policy: z.enum(ACTION_POLICIES as unknown as [string, ...string[]]).optional(),
+  recurrenceKind: z.enum(RECURRENCE_KINDS as unknown as [string, ...string[]]).optional(),
+  recurrenceHours: z.number().int().nullable().optional(),
+  recurrenceHour: z.number().int().min(0).max(23).nullable().optional(),
+  timezone: z.string().trim().max(64).optional(),
+}).strict();
+
+const actionRuleSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  reason: z.enum(ACTION_REASONS as unknown as [string, ...string[]]),
+  statuses: z.array(z.number().int().min(100).max(599)).max(10).optional(),
+  pattern: z.string().trim().min(1).max(500),
+  url: z.string().trim().max(500).nullable().optional(),
+  policy: z.enum(ACTION_POLICIES as unknown as [string, ...string[]]).optional(),
+  enabled: z.boolean().optional(),
+}).strict();
+
+// Declared before '/:id/...' routes so the literal paths are not read as ids.
+keysRouter.get('/action-needed', (req: Request, res: Response) => {
+  const includeSnoozed = req.query.includeSnoozed === '1' || req.query.includeSnoozed === 'true';
+  const flags = listActions({ includeSnoozed });
+  const db = getDb();
+  const withLabels = flags.map(flag => {
+    const row = db.prepare('SELECT label, platform FROM api_keys WHERE id = ?')
+      .get(flag.keyId) as { label: string | null; platform: string } | undefined;
+    return { ...flag, label: row?.label ?? `key ${flag.keyId}`, platform: row?.platform ?? null };
+  });
+  res.json({ summary: actionSummary(), actions: withLabels });
+});
+
+keysRouter.get('/action-rules', (_req: Request, res: Response) => {
+  res.json({ rules: listActionRules() });
+});
+
+keysRouter.post('/action-rules', (req: Request, res: Response) => {
+  const parsed = actionRuleSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: { message: 'Invalid rule', issues: parsed.error.issues } });
+    return;
+  }
+  try {
+    res.status(201).json({ success: true, rule: createActionRule(parsed.data as never) });
+  } catch (err) {
+    res.status(400).json({ error: { message: (err as Error).message } });
+  }
+});
+
+keysRouter.patch('/action-rules/:ruleId', (req: Request, res: Response) => {
+  const ruleId = Number(req.params.ruleId);
+  if (!Number.isInteger(ruleId) || ruleId <= 0) {
+    res.status(400).json({ error: { message: 'Invalid rule id' } });
+    return;
+  }
+  const parsed = actionRuleSchema.partial().safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: { message: 'Invalid rule', issues: parsed.error.issues } });
+    return;
+  }
+  try {
+    const rule = updateActionRule(ruleId, parsed.data as never);
+    if (!rule) {
+      res.status(404).json({ error: { message: 'Rule not found' } });
+      return;
+    }
+    res.json({ success: true, rule });
+  } catch (err) {
+    res.status(400).json({ error: { message: (err as Error).message } });
+  }
+});
+
+keysRouter.delete('/action-rules/:ruleId', (req: Request, res: Response) => {
+  const ruleId = Number(req.params.ruleId);
+  if (!Number.isInteger(ruleId) || ruleId <= 0) {
+    res.status(400).json({ error: { message: 'Invalid rule id' } });
+    return;
+  }
+  if (!deleteActionRule(ruleId)) {
+    res.status(404).json({ error: { message: 'Rule not found' } });
+    return;
+  }
+  res.json({ success: true });
+});
+
+keysRouter.post('/:id/action', (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: { message: 'Invalid key id' } });
+    return;
+  }
+  const parsed = actionRaiseSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: { message: 'Invalid action', issues: parsed.error.issues } });
+    return;
+  }
+  try {
+    const input = parsed.data as Record<string, unknown>;
+    const flag = raiseAction({ ...input, keyId: id, source: 'manual' } as never);
+    res.status(201).json({ success: true, action: flag });
+  } catch (err) {
+    res.status(400).json({ error: { message: (err as Error).message } });
+  }
+});
+
+keysRouter.post('/:id/action/done', (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: { message: 'Invalid key id' } });
+    return;
+  }
+  if (!clearAction(id)) {
+    res.status(404).json({ error: { message: 'No action needed on this key' } });
+    return;
+  }
+  res.json({ success: true });
+});
+
+keysRouter.post('/:id/action/snooze', (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: { message: 'Invalid key id' } });
+    return;
+  }
+  const parsed = z.object({ hours: z.number().positive().max(24 * 30).optional() }).strict().safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: { message: 'hours must be a positive number' } });
+    return;
+  }
+  const flag = snoozeAction(id, parsed.data.hours ?? DEFAULT_SNOOZE_HOURS);
+  if (!flag) {
+    res.status(404).json({ error: { message: 'No action needed on this key' } });
+    return;
+  }
+  res.json({ success: true, action: flag });
 });
 
 // ── Windowed caps + account grouping [fork 4/10] ────────────────────────────
