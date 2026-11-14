@@ -26,6 +26,24 @@ import {
 } from '../services/compression/config.js';
 import { getHeadroomThresholds, setHeadroomThresholds, getTaskWeightShare, setTaskWeightShare, getMinReliabilityFloor, setMinReliabilityFloor, isProviderMomentAttributionEnabled, setProviderMomentAttribution } from '../services/router.js';
 import { MCP_ENABLED_SETTING, isMcpServerEnabled } from './mcp.js';
+import { resolveIntSetting, type ResolvedIntSetting } from '../lib/runtime-setting.js';
+// Mirrors services/health.ts (TRANSPORT_PARK_AFTER_SETTING /
+// SUGGESTED_TRANSPORT_PARK_AFTER). Kept local so this route does not depend on
+// the health module's exports, which several proxy tests replace with a partial
+// mock — a top-level named import from a mocked module is undefined at load time.
+const TRANSPORT_PARK_AFTER_SETTING = 'health_transport_park_after';
+const SUGGESTED_TRANSPORT_PARK_AFTER = 6;
+import {
+  STREAM_STALL_TIMEOUT_SETTING,
+  DEFAULT_STREAM_STALL_TIMEOUT_MS,
+} from '../lib/provider-timeout.js';
+import { DEFAULT_FALLBACK_TIME_BUDGET_MS, FALLBACK_TIME_BUDGET_SETTING } from '../lib/fallback-loop.js';
+import {
+  KEY_MAX_CONCURRENT_SETTING,
+  KEY_CONCURRENCY_QUEUE_TIMEOUT_SETTING,
+  DEFAULT_KEY_MAX_CONCURRENT,
+  DEFAULT_KEY_CONCURRENCY_QUEUE_TIMEOUT_MS,
+} from '../services/ratelimit.js';
 import { z } from 'zod';
 import { getAppVersion } from '../lib/app-version.js';
 import {
@@ -659,4 +677,94 @@ settingsRouter.post('/proxy/test', async (req: Request, res: Response) => {
       : getFetchRelayToken(),
   });
   res.json(result);
+});
+
+// ── Router settings ([fork 3/10]) ────────────────────────────────────────────
+//
+// The knobs that decide how the gateway behaves when a provider misbehaves.
+// They used to be env-only (a restart per change) or spread across unrelated
+// screens; here they are runtime values with one precedence rule — settings
+// table → env → built-in default — and the response reports which layer is
+// actually in force, so the dashboard never shows a number that is not applied.
+
+const ROUTER_KNOBS = {
+  transportParkAfter: {
+    key: TRANSPORT_PARK_AFTER_SETTING,
+    envVar: 'HEALTH_TRANSPORT_PARK_AFTER',
+    defaultValue: SUGGESTED_TRANSPORT_PARK_AFTER,
+  },
+  streamStallTimeoutMs: {
+    key: STREAM_STALL_TIMEOUT_SETTING,
+    envVar: 'PROVIDER_STREAM_STALL_TIMEOUT_MS',
+    defaultValue: DEFAULT_STREAM_STALL_TIMEOUT_MS,
+  },
+  fallbackTimeBudgetMs: {
+    key: FALLBACK_TIME_BUDGET_SETTING,
+    envVar: 'FALLBACK_TIME_BUDGET_MS',
+    defaultValue: DEFAULT_FALLBACK_TIME_BUDGET_MS,
+  },
+  maxConsecutiveUpstreamFails: {
+    key: MAX_CONSECUTIVE_UPSTREAM_FAILS_SETTING,
+    envVar: 'MAX_CONSECUTIVE_UPSTREAM_FAILS',
+    defaultValue: 0,
+  },
+  keyMaxConcurrentDefault: {
+    key: KEY_MAX_CONCURRENT_SETTING,
+    envVar: 'MAX_CONCURRENT_REQUESTS_PER_KEY',
+    defaultValue: DEFAULT_KEY_MAX_CONCURRENT,
+  },
+  keyConcurrencyQueueTimeoutMs: {
+    key: KEY_CONCURRENCY_QUEUE_TIMEOUT_SETTING,
+    envVar: undefined,
+    defaultValue: DEFAULT_KEY_CONCURRENCY_QUEUE_TIMEOUT_MS,
+  },
+} as const;
+
+type RouterKnobName = keyof typeof ROUTER_KNOBS;
+
+/** Effective value + provenance for every router knob. */
+function routerSettingsSnapshot(): Record<RouterKnobName, ResolvedIntSetting> {
+  const out = {} as Record<RouterKnobName, ResolvedIntSetting>;
+  for (const name of Object.keys(ROUTER_KNOBS) as RouterKnobName[]) {
+    out[name] = resolveIntSetting(ROUTER_KNOBS[name]);
+  }
+  return out;
+}
+
+// Upper bounds are sanity rails (a pasted epoch-millis must not set a decade-long
+// stall timeout); 0 always means "off"/"unlimited" where the knob defines it.
+const routerSettingsSchema = z.object({
+  transportParkAfter: z.number().int().min(0).max(1000).nullable().optional(),
+  streamStallTimeoutMs: z.number().int().min(0).max(3_600_000).nullable().optional(),
+  fallbackTimeBudgetMs: z.number().int().min(0).max(3_600_000).nullable().optional(),
+  maxConsecutiveUpstreamFails: z.number().int().min(0).max(10_000).nullable().optional(),
+  keyMaxConcurrentDefault: z.number().int().min(0).max(1000).nullable().optional(),
+  keyConcurrencyQueueTimeoutMs: z.number().int().min(0).max(600_000).nullable().optional(),
+}).strict();
+
+settingsRouter.get('/router', (_req: Request, res: Response) => {
+  res.json(routerSettingsSnapshot());
+});
+
+settingsRouter.put('/router', (req: Request, res: Response) => {
+  const parsed = routerSettingsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: {
+        message: `Invalid router settings: ${parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ')}`,
+        type: 'invalid_request_error',
+      },
+    });
+    return;
+  }
+  const db = getDb();
+  for (const [name, value] of Object.entries(parsed.data) as [RouterKnobName, number | null | undefined][]) {
+    if (value === undefined) continue;
+    const { key } = ROUTER_KNOBS[name];
+    // null clears the stored value, so the env var (or the default) takes over
+    // again; a number pins it. Both apply to the next request.
+    if (value === null) db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+    else setSetting(key, String(value));
+  }
+  res.json(routerSettingsSnapshot());
 });

@@ -1,4 +1,5 @@
 import { getDb } from '../db/index.js';
+import { resolveIntSetting, type ResolvedIntSetting } from '../lib/runtime-setting.js';
 import { resolveProvider } from '../providers/index.js';
 import { BaseProvider } from '../providers/base.js';
 import { decrypt } from '../lib/crypto.js';
@@ -97,17 +98,33 @@ const failureCount = new Map<number, number>();
 // latency budget (#1510 measured 264 failures vs 8 successes in a day on a
 // 39-key install with zero keys ever showing 'error').
 //
-// Opt-in: HEALTH_TRANSPORT_PARK_AFTER sets the streak length (6 is the
-// suggested value, ~30 minutes at the default cadence). Unset or 0 keeps the
-// default "keep trying" behaviour: a transport error never takes a key out of
-// rotation, because a key the router stops using can only come back through a
-// probe, and a provider whose validation endpoint is down while chat still
-// works would otherwise lose every key at once.
+// Runtime-tunable ([fork 3/10]): the health_transport_park_after setting in the
+// dashboard governs the streak length, HEALTH_TRANSPORT_PARK_AFTER is the env
+// fallback, and 6 (~30 minutes at the default cadence) is the built-in default.
+// Setting it to 0 turns parking off: a transport error then never takes a key
+// out of rotation, because a key the router stops using can only come back
+// through a probe, and a provider whose validation endpoint is down while chat
+// still works would otherwise lose every key at once.
 export const SUGGESTED_TRANSPORT_PARK_AFTER = 6;
 
-/** Streak length that parks a key, or 0 when parking is off (the default). */
+/** settings-table key for the parking streak ([fork 3/10]). */
+export const TRANSPORT_PARK_AFTER_SETTING = 'health_transport_park_after';
+
+const TRANSPORT_PARK_AFTER_SPEC = {
+  key: TRANSPORT_PARK_AFTER_SETTING,
+  envVar: 'HEALTH_TRANSPORT_PARK_AFTER',
+  defaultValue: SUGGESTED_TRANSPORT_PARK_AFTER,
+  min: 0,
+} as const;
+
+/** Streak length that parks a key, plus where the value came from. */
+export function resolveTransportParkAfter(): ResolvedIntSetting {
+  return resolveIntSetting(TRANSPORT_PARK_AFTER_SPEC);
+}
+
+/** Streak length that parks a key, or 0 when parking is off. */
 export function getTransportParkAfter(): number {
-  return positiveIntEnv(process.env.HEALTH_TRANSPORT_PARK_AFTER, 0);
+  return resolveTransportParkAfter().value;
 }
 
 const transportFailures = new Map<number, number>();

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Check,
   ChevronsUpDown,
@@ -12,6 +13,7 @@ import {
   SlidersHorizontal,
   Sun,
   Wrench,
+  Workflow,
   X,
 } from 'lucide-react'
 import {
@@ -23,6 +25,8 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip } from '@/components/tooltip'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { SUPPORTED_LOCALES, type Locale, useI18n } from '@/i18n'
 import { type Theme, useTheme } from '@/theme-context'
 import { apiFetch } from '@/lib/api'
@@ -280,12 +284,13 @@ const ENGINES = [
   { id: 'hard-budget', tKey: 'engineHardBudget', lossless: false },
 ] as const
 
-type SectionId = 'general' | 'compression' | 'advanced' | 'preview'
+type SectionId = 'general' | 'compression' | 'advanced' | 'router' | 'preview'
 
 const SECTIONS = [
   { id: 'general', tKey: 'sectionGeneral', icon: SlidersHorizontal },
   { id: 'compression', tKey: 'sectionCompression', icon: Gauge },
   { id: 'advanced', tKey: 'sectionAdvanced', icon: Wrench },
+  { id: 'router', tKey: 'sectionRouter', icon: Workflow },
   { id: 'preview', tKey: 'sectionPreview', icon: FlaskConical },
 ] as const satisfies ReadonlyArray<{ id: SectionId; tKey: string; icon: typeof Gauge }>
 
@@ -591,6 +596,142 @@ function GeneralSection() {
   )
 }
 
+
+// [fork 3/10] Router settings: the knobs that decide how the gateway behaves
+// when a provider misbehaves. Each one is a runtime value with one precedence
+// rule (stored → env → default); the badge under every field says which layer is
+// in force, because a number that is not actually applied is worse than none.
+interface RouterKnob {
+  value: number
+  source: 'db' | 'env' | 'default'
+  envVar?: string
+  envValue?: string
+  defaultValue: number
+}
+
+type RouterSettings = Record<
+  'transportParkAfter' | 'streamStallTimeoutMs' | 'fallbackTimeBudgetMs'
+  | 'maxConsecutiveUpstreamFails' | 'keyMaxConcurrentDefault' | 'keyConcurrencyQueueTimeoutMs',
+  RouterKnob
+>
+
+const ROUTER_FIELDS: Array<{ name: keyof RouterSettings; labelKey: string; hintKey: string }> = [
+  { name: 'transportParkAfter', labelKey: 'settings.routerTransportParkAfter', hintKey: 'settings.routerTransportParkAfterHint' },
+  { name: 'streamStallTimeoutMs', labelKey: 'settings.routerStreamStall', hintKey: 'settings.routerStreamStallHint' },
+  { name: 'fallbackTimeBudgetMs', labelKey: 'settings.routerFallbackBudget', hintKey: 'settings.routerFallbackBudgetHint' },
+  { name: 'maxConsecutiveUpstreamFails', labelKey: 'settings.routerConsecutiveFails', hintKey: 'settings.routerConsecutiveFailsHint' },
+  { name: 'keyMaxConcurrentDefault', labelKey: 'settings.routerKeyMaxConcurrent', hintKey: 'settings.routerKeyMaxConcurrentHint' },
+  { name: 'keyConcurrencyQueueTimeoutMs', labelKey: 'settings.routerQueueTimeout', hintKey: 'settings.routerQueueTimeoutHint' },
+]
+
+function RouterSection() {
+  const { t } = useI18n()
+  const queryClient = useQueryClient()
+  const [draft, setDraft] = useState<Partial<Record<keyof RouterSettings, string>>>({})
+  const [error, setError] = useState('')
+
+  const { data, isLoading } = useQuery<RouterSettings>({
+    queryKey: ['settings-router'],
+    queryFn: () => apiFetch<RouterSettings>('/api/settings/router'),
+  })
+
+  const save = useMutation({
+    mutationFn: (body: Record<string, number | null>) =>
+      apiFetch<RouterSettings>('/api/settings/router', { method: 'PUT', body: JSON.stringify(body) }),
+    onSuccess: (next) => {
+      queryClient.setQueryData(['settings-router'], next)
+      setDraft({})
+      setError('')
+    },
+    onError: (err: Error) => setError(err.message),
+  })
+
+  if (isLoading || !data) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" />
+        {t('common.loading')}
+      </div>
+    )
+  }
+
+  const pending: Record<string, number | null> = {}
+  let invalid = false
+  for (const field of ROUTER_FIELDS) {
+    const raw = draft[field.name]
+    if (raw === undefined) continue
+    const trimmed = raw.trim()
+    if (trimmed === '') { pending[field.name] = null; continue }
+    if (!/^\d+$/.test(trimmed)) { invalid = true; continue }
+    pending[field.name] = Number(trimmed)
+  }
+
+  function sourceBadge(knob: RouterKnob): { text: string; className: string } {
+    if (knob.source === 'db') return { text: t('settings.routerSourceStored'), className: 'text-foreground' }
+    if (knob.source === 'env') {
+      const env = knob.envVar ? `${knob.envVar}=${knob.envValue ?? ''}` : ''
+      return { text: `${t('settings.routerSourceEnv')}${env ? ` · ${env}` : ''}`, className: 'text-amber-600 dark:text-amber-500' }
+    }
+    return { text: t('settings.routerSourceDefault'), className: 'text-muted-foreground' }
+  }
+
+  return (
+    <div>
+      <SectionHeader title={t('settings.sectionRouter')} description={t('settings.routerDescription')} />
+      {ROUTER_FIELDS.map(field => {
+        const knob = data[field.name]
+        const badge = sourceBadge(knob)
+        const value = draft[field.name] ?? String(knob.value)
+        return (
+          <Row
+            key={field.name}
+            label={t(field.labelKey)}
+            hint={t(field.hintKey)}
+            control={
+              <div className="flex items-center gap-2">
+                <div className="text-end">
+                  <Input
+                    inputMode="numeric"
+                    value={value}
+                    onChange={event => setDraft(current => ({ ...current, [field.name]: event.target.value }))}
+                    placeholder={String(knob.defaultValue)}
+                    aria-label={t(field.labelKey)}
+                    className="w-28 font-mono text-xs"
+                  />
+                  <span className={`mt-1 block text-[11px] ${badge.className}`}>{badge.text}</span>
+                </div>
+                {knob.source === 'db' && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    title={t('settings.routerReset')}
+                    aria-label={t('settings.routerReset')}
+                    onClick={() => save.mutate({ [field.name]: null })}
+                  >
+                    <X className="size-3.5" />
+                  </Button>
+                )}
+              </div>
+            }
+          />
+        )
+      })}
+      <div className="mt-5 flex items-center justify-end gap-2">
+        {error && <p className="me-auto text-xs text-destructive">{error}</p>}
+        <Button
+          type="button"
+          size="sm"
+          disabled={Object.keys(pending).length === 0 || invalid || save.isPending}
+          onClick={() => save.mutate(pending)}
+        >
+          {save.isPending ? t('common.saving') : t('common.save')}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 export function SettingsDialog({
   open,
   onOpenChange,
@@ -602,7 +743,7 @@ export function SettingsDialog({
   const [section, setSection] = useState<SectionId>('general')
   const state = useCompressionSettings(open)
   const { config, busy, error, save } = state
-  const compressionSection = section !== 'general'
+  const compressionSection = section === 'compression' || section === 'advanced' || section === 'preview'
   const loading = compressionSection && !config && busy === 'load'
 
   return (
@@ -650,6 +791,7 @@ export function SettingsDialog({
           {/* min-height keeps the popup from resizing as sections are switched. */}
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:min-h-[27rem] sm:px-6 sm:py-6">
             {section === 'general' && <GeneralSection />}
+            {section === 'router' && <RouterSection />}
             {loading && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" />

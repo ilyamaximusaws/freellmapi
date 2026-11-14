@@ -45,6 +45,9 @@ describe('transport-error parking (#1510)', () => {
 
   beforeEach(() => {
     process.env.HEALTH_TRANSPORT_PARK_AFTER = String(CONSECUTIVE_TRANSPORT_ERRORS_TO_PARK);
+    // The stored setting outranks the env ([fork 3/10]), so a test that pins it
+    // must not leak that value into the next one.
+    getDb().prepare("DELETE FROM settings WHERE key = 'health_transport_park_after'").run();
     validateKey.mockReset();
     clearTransportFailureState();
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -71,18 +74,36 @@ describe('transport-error parking (#1510)', () => {
     for (let i = 0; i < times; i++) await checkKeyHealth(id);
   }
 
-  it('parking is off by default: a long unreachable streak keeps the key in rotation', async () => {
+  // [fork 3/10] Parking is now ON by default at the suggested streak (6): the
+  // env var was opt-in, and installs without it kept handing traffic to keys
+  // whose provider had been unreachable for days.
+  it('parks by default after the suggested streak, with no env var set', async () => {
     delete process.env.HEALTH_TRANSPORT_PARK_AFTER;
+    const id = seedKey('healthy');
+    await failTransport(CONSECUTIVE_TRANSPORT_ERRORS_TO_PARK, id);
+    expect(statusOf(id)).toBe('error');
+  });
+
+  it('HEALTH_TRANSPORT_PARK_AFTER=0 keeps parking off', async () => {
+    process.env.HEALTH_TRANSPORT_PARK_AFTER = '0';
     const id = seedKey('healthy');
     await failTransport(CONSECUTIVE_TRANSPORT_ERRORS_TO_PARK * 3, id);
     expect(statusOf(id)).toBe('healthy');
   });
 
-  it('HEALTH_TRANSPORT_PARK_AFTER=0 also keeps parking off', async () => {
-    process.env.HEALTH_TRANSPORT_PARK_AFTER = '0';
+  it('a stored health_transport_park_after overrides the env and applies without a restart', async () => {
+    process.env.HEALTH_TRANSPORT_PARK_AFTER = '0'; // env says off
+    const { setSetting } = await import('../../db/index.js');
+    setSetting('health_transport_park_after', '2'); // the dashboard says 2
     const id = seedKey('healthy');
-    await failTransport(CONSECUTIVE_TRANSPORT_ERRORS_TO_PARK * 3, id);
-    expect(statusOf(id)).toBe('healthy');
+    await failTransport(2, id);
+    expect(statusOf(id)).toBe('error');
+
+    // Flipping the stored value back to 0 disables parking for the next probe.
+    setSetting('health_transport_park_after', '0');
+    const other = seedKey('healthy');
+    await failTransport(5, other);
+    expect(statusOf(other)).toBe('healthy');
   });
 
   it('a short unreachable streak never parks the key', async () => {
