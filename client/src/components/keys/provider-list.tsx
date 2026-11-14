@@ -733,6 +733,18 @@ export function ProviderList({ onAddKey }: { onAddKey: () => void }) {
                                 {t(k.modelScope!.length === 1 ? 'keys.modelScopeBadgeOne' : 'keys.modelScopeBadgeOther', { count: k.modelScope!.length })}
                               </Badge>
                             )}
+                            {/* [fork 6/10] Only a key that differs from the
+                                defaults shows its rotation weight/order — an
+                                untouched install looks exactly as before. */}
+                            {((k.weight ?? 1) !== 1 || (k.order ?? 0) !== 0) && (
+                              <Badge
+                                variant="secondary"
+                                className={`text-[10px] text-muted-foreground ${k.enabled ? '' : 'opacity-50'}`}
+                                title={t('keys.rotationHint')}
+                              >
+                                {t('keys.rotationBadge', { weight: k.weight ?? 1, order: k.order ?? 0 })}
+                              </Badge>
+                            )}
                             {/* #1403 phase 3: the provider-reported balance (#1403).
                                 Amber at ≤20% left — the same low-balance signal the
                                 Quota outlook panel gives, but visible where the operator

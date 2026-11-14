@@ -20,6 +20,7 @@ import { ProviderList } from '@/components/keys/provider-list'
 import { ProviderChecklistSection } from '@/components/keys/provider-checklist-section'
 import { ActionNeededSection } from '@/components/keys/action-needed-section'
 import { AddKeyDialog } from '@/components/keys/add-key-dialog'
+import { BulkRotationDialog } from '@/components/keys/bulk-rotation-dialog'
 import { ExportKeysDialog } from '@/components/keys/export-keys-dialog'
 import { AgentCompatibilitySection } from '@/components/keys/agent-compatibility-section'
 
@@ -50,6 +51,7 @@ export default function KeysPage() {
     if (searchParams.has('add')) setSearchParams(prev => { prev.delete('add'); return prev }, { replace: true })
   }, [searchParams, setSearchParams])
   const [exportOpen, setExportOpen] = useState(false)
+  const [bulkRotationOpen, setBulkRotationOpen] = useState(false)
 
   const openAddKey = (platform: Platform | '' = '') => {
     setAddPlatform(platform)
@@ -88,6 +90,13 @@ export default function KeysPage() {
             {(tab === 'providers' || tab === 'quotaSignals') && keys.length > 0 && (
               <Button variant="outline" size="sm" onClick={() => checkAll.mutate()} disabled={checkAll.isPending}>
                 {checkAll.isPending ? t('keys.checking') : t('keys.checkAll')}
+              </Button>
+            )}
+            {/* [fork 6/10] Weight and order are set in groups ("primaries vs
+                backups"), so the bulk editor lives next to Export. */}
+            {(tab === 'providers' || tab === 'quotaSignals') && keys.length > 1 && (
+              <Button variant="outline" size="sm" onClick={() => setBulkRotationOpen(true)}>
+                {t('keys.rotationTitle')}
               </Button>
             )}
             {keys.length > 0 && (
@@ -142,6 +151,9 @@ export default function KeysPage() {
       </div>
 
       <AddKeyDialog open={addOpen} onOpenChange={setAddOpen} initialPlatform={addPlatform || undefined} />
+      {bulkRotationOpen && (
+        <BulkRotationDialog keys={keys} open={bulkRotationOpen} onOpenChange={setBulkRotationOpen} />
+      )}
       {/* Mounted only while open so the export flow always starts at step one
           and never retains a previously typed password. */}
       {exportOpen && <ExportKeysDialog open={exportOpen} onOpenChange={setExportOpen} />}

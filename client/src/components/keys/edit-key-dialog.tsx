@@ -22,6 +22,9 @@ type UpdateBody = {
   monthlyTokenCap?: number
   // Per-key in-flight cap ([fork 2/10]): 0 = unlimited, null = inherit.
   maxConcurrent?: number | null
+  // Rotation share and group ([fork 6/10]).
+  weight?: number
+  order?: number
   groupLabel?: string
   proxyUrl?: string
 }
@@ -105,6 +108,9 @@ export function EditKeyDialog({
   // the dashboard at all; it shipped API-only. Empty = unlimited.
   const [requestCap, setRequestCap] = useState(capToInput(apiKey.monthlyRequestCap))
   const [tokenCap, setTokenCap] = useState(capToInput(apiKey.monthlyTokenCap))
+  // Rotation weight/order ([fork 6/10]): '' means "leave unchanged".
+  const [weight, setWeight] = useState(String(apiKey.weight ?? 1))
+  const [order, setOrder] = useState(String(apiKey.order ?? 0))
   // Per-key concurrency cap ([fork 2/10]): blank = inherit the provider/global
   // cap, 0 = unlimited, N = at most N requests in flight on this credential.
   const [maxConcurrentInput, setMaxConcurrentInput] = useState(
@@ -144,7 +150,14 @@ export function EditKeyDialog({
   const maxConcurrentChanged = (apiKey.maxConcurrent ?? null) !== maxConcurrentValue
   const groupLabelChanged = isCustom && groupLabel.trim() !== (apiKey.groupLabel ?? '')
   const proxyChanged = Boolean(proxyUrl.trim()) || clearProxy
-  const hasChanges = label !== apiKey.label || Boolean(credential) || requestCapChanged || tokenCapChanged || groupLabelChanged || proxyChanged || maxConcurrentChanged
+  // Rotation weight/group ([fork 6/10]). Both are non-negative integers.
+  const weightTrimmed = weight.trim()
+  const weightValid = /^\d+$/.test(weightTrimmed)
+  const orderTrimmed = order.trim()
+  const orderValid = /^-?\d+$/.test(orderTrimmed)
+  const weightChanged = weightValid && Number(weightTrimmed) !== (apiKey.weight ?? 1)
+  const orderChanged = orderValid && Number(orderTrimmed) !== (apiKey.order ?? 0)
+  const hasChanges = label !== apiKey.label || Boolean(credential) || requestCapChanged || tokenCapChanged || groupLabelChanged || proxyChanged || maxConcurrentChanged || weightChanged || orderChanged
 
   const updateKey = useMutation({
     mutationFn: (body: UpdateBody) =>
@@ -158,7 +171,7 @@ export function EditKeyDialog({
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (credentialError || capError || !maxConcurrentValid) {
+    if (credentialError || capError || !maxConcurrentValid || !weightValid || !orderValid) {
       setAttempted(true)
       return
     }
@@ -169,6 +182,8 @@ export function EditKeyDialog({
     if (requestCapChanged && requestCapValue !== null) body.monthlyRequestCap = requestCapValue
     if (tokenCapChanged && tokenCapValue !== null) body.monthlyTokenCap = tokenCapValue
     if (maxConcurrentChanged && maxConcurrentValid) body.maxConcurrent = maxConcurrentValue
+    if (weightChanged) body.weight = Number(weightTrimmed)
+    if (orderChanged) body.order = Number(orderTrimmed)
     if (groupLabelChanged) body.groupLabel = groupLabel.trim()
     // '' clears the override; a typed URL replaces it (and wins over Remove).
     if (proxyChanged) body.proxyUrl = proxyUrl.trim()
@@ -356,6 +371,35 @@ export function EditKeyDialog({
             />
             <p className="text-[11px] text-muted-foreground">{t('keys.keyConcurrencyHint')}</p>
           </div>
+
+          {/* Rotation weight and group ([fork 6/10]): the share this key takes
+              inside its group, and the group itself. Applied on the next
+              routing decision, so saving is enough. */}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs" htmlFor="edit-key-weight">{t('keys.weightLabel')}</Label>
+              <Input
+                id="edit-key-weight"
+                inputMode="numeric"
+                value={weight}
+                onChange={e => setWeight(e.target.value)}
+                aria-invalid={attempted && !weightValid}
+                className="font-mono text-xs"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs" htmlFor="edit-key-order">{t('keys.orderLabel')}</Label>
+              <Input
+                id="edit-key-order"
+                inputMode="numeric"
+                value={order}
+                onChange={e => setOrder(e.target.value)}
+                aria-invalid={attempted && !orderValid}
+                className="font-mono text-xs"
+              />
+            </div>
+          </div>
+          <p className="text-[11px] text-muted-foreground">{t('keys.rotationHint')}</p>
 
           {updateKey.isError && (
             <p className="text-xs text-destructive">{(updateKey.error as Error).message}</p>

@@ -32,6 +32,7 @@ import { TIMEOUT_ERROR_MARKERS, isProviderMomentFailure } from '../lib/error-cla
 import { checkMonthlyBudget, reserveMonthlyBudget } from './key-budget.js';
 import { checkKeyCaps, reserveKeyCaps, isCapSoftPressured } from './key-caps.js';
 import { excludedKeyIds } from './action-needed.js';
+import { usesWeighting, orderKeysByWeight, effectiveKeyWeight } from './key-weight.js';
 import { cloudflareNeuronsAvailable } from './cloudflare-neurons.js';
 import { applyModelWeightOverride, getModelWeightOverrides } from './model-weight-overrides.js';
 import { modelsWithOverriddenField, getCatalogModelTombstone } from './model-state.js';
@@ -154,6 +155,10 @@ interface KeyRow {
   model_scope_json: string | null;
   // Per-key in-flight cap override ([fork 2/10]); NULL = inherit, 0 = unlimited.
   max_concurrent?: number | null;
+  // Rotation share and group ([fork 6/10]): weight defaults to 1, key_order to 0
+  // (the only group). Read fresh per decision, so a change needs no restart.
+  weight?: number | null;
+  key_order?: number | null;
   // Encrypted per-key proxy override (#590); all NULL = no override.
   proxy_encrypted: string | null;
   proxy_iv: string | null;
@@ -1683,6 +1688,16 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
     ranked = orderKeysByRemainingQuota(entry, base);
   }
 
+  // [fork 6/10] An explicit weight/order on any key replaces the implicit
+  // ordering (bandit score, remaining quota, round-robin) with what the operator
+  // asked for: groups by ascending key_order, weighted shuffle inside a group. A
+  // later group needs no special casing — the walk returns the first key that
+  // passes its gates, so group 1 is only reached once group 0 is unusable.
+  const weighted = keys.length > 1 && usesWeighting(keys);
+  if (weighted) {
+    ranked = orderKeysByWeight(keys, { weightOf: k => effectiveKeyWeight(k, entry.model_id) });
+  }
+
   // A custom model belongs to exactly one endpoint (#212), but an endpoint can
   // hold several credentials — so the pool is every key on the same base_url,
   // rotated like any other platform's keys (#619). Legacy rows (key_id NULL)
@@ -1701,7 +1716,9 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
       idx++;
 
       if (endpointKeyIds && !endpointKeyIds.has(key.id)) { note('custom-key-mismatch'); continue; }
-      if (!allowSoft && isCapSoftPressured(key.id, entry.model_id)) { note('key-cap-soft'); continue; }
+      // With explicit weighting the soft-cap discount is already folded into
+      // the key's weight, so the two-pass demotion would double-count it.
+      if (!allowSoft && !weighted && isCapSoftPressured(key.id, entry.model_id)) { note('key-cap-soft'); continue; }
 
     const skipId = `${entry.platform}:${entry.model_id}:${key.id}`;
     if (skipKeys?.has(skipId)) { note('already-failed-this-request'); continue; }

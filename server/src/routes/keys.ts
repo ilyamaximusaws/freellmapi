@@ -173,8 +173,13 @@ const updateKeySchema = z.object({
   key: z.string().trim().min(1).optional(),
   // Per-key in-flight cap ([fork 2/10]): 0 = unlimited, null = inherit.
   maxConcurrent: z.number().int().min(0).max(1000).nullable().optional(),
-}).refine(data => data.enabled !== undefined || data.label !== undefined || data.modelScope !== undefined || data.proxyUrl !== undefined || data.key !== undefined || data.monthlyRequestCap !== undefined || data.monthlyTokenCap !== undefined || data.groupLabel !== undefined || data.maxConcurrent !== undefined, {
-  message: 'At least one of enabled, label, modelScope, proxyUrl, key, monthlyRequestCap, monthlyTokenCap, groupLabel or maxConcurrent must be provided',
+  // Rotation share ([fork 6/10]): relative weight inside the key's order group.
+  weight: z.number().int().min(0).max(1_000_000).optional(),
+  // Rotation group ([fork 6/10]): lower is tried first; a higher group is only
+  // used when every key of the lower ones is unusable.
+  order: z.number().int().min(-1_000_000).max(1_000_000).optional(),
+}).refine(data => data.enabled !== undefined || data.label !== undefined || data.modelScope !== undefined || data.proxyUrl !== undefined || data.key !== undefined || data.monthlyRequestCap !== undefined || data.monthlyTokenCap !== undefined || data.groupLabel !== undefined || data.maxConcurrent !== undefined || data.weight !== undefined || data.order !== undefined, {
+  message: 'At least one of enabled, label, modelScope, proxyUrl, key, monthlyRequestCap, monthlyTokenCap, groupLabel, maxConcurrent, weight or order must be provided',
 });
 
 const importKeySchema = z.object({
@@ -530,6 +535,9 @@ keysRouter.get('/', (_req: Request, res: Response) => {
       // Per-key in-flight cap ([fork 2/10]): raw column + the value actually
       // enforced after the key/platform/global/setting precedence chain.
       maxConcurrent: row.max_concurrent ?? null,
+      // Rotation share and group ([fork 6/10]).
+      weight: row.weight ?? 1,
+      order: row.key_order ?? 0,
       effectiveMaxConcurrent: resolveKeyConcurrencyLimit(row.platform, row.max_concurrent).limit,
       monthlyUsage: {
         requests: monthlyUsage.requests,
@@ -1964,7 +1972,7 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
     return;
   }
 
-  const { enabled, label, modelScope, proxyUrl, key, monthlyRequestCap, monthlyTokenCap, groupLabel, maxConcurrent } = parsed.data;
+  const { enabled, label, modelScope, proxyUrl, key, monthlyRequestCap, monthlyTokenCap, groupLabel, maxConcurrent, weight, order } = parsed.data;
   const updates: string[] = [];
   const values: (string | number | null)[] = [];
   let changedKey: string | undefined;
@@ -2035,6 +2043,16 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
     updates.push('max_concurrent = ?');
     values.push(maxConcurrent);
   }
+  // Rotation weight/group ([fork 6/10]): read fresh on every routing decision,
+  // so a PATCH takes effect on the next request with no restart.
+  if (weight !== undefined) {
+    updates.push('weight = ?');
+    values.push(weight);
+  }
+  if (order !== undefined) {
+    updates.push('key_order = ?');
+    values.push(order);
+  }
   // Custom-endpoint group label (#1176) is written below, across the
   // endpoint's whole key pool rather than this one row.
   const db = getDb();
@@ -2082,7 +2100,45 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
   if (key !== undefined) response.maskedKey = maskKey(key);
   if (modelScope !== undefined) response.modelScope = scopeIds.length > 0 ? scopeIds : null;
   if (groupLabel !== undefined) response.groupLabel = normalizeGroupLabel(groupLabel);
+  if (weight !== undefined) response.weight = weight;
+  if (order !== undefined) response.order = order;
   res.json(response);
+});
+
+// ── Bulk rotation settings [fork 6/10] ─────────────────────────────────────
+// Weight and order are per-key, but they are only ever set in groups ("these
+// three are my primaries, the rest are backups"). One request per selection
+// instead of one per row, in a single transaction.
+
+const bulkRotationSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(500),
+  weight: z.number().int().min(0).max(1_000_000).optional(),
+  order: z.number().int().min(-1_000_000).max(1_000_000).optional(),
+  enabled: z.boolean().optional(),
+}).strict().refine(
+  data => data.weight !== undefined || data.order !== undefined || data.enabled !== undefined,
+  { message: 'At least one of weight, order or enabled must be provided' },
+);
+
+keysRouter.patch('/bulk/rotation', (req: Request, res: Response) => {
+  const parsed = bulkRotationSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: { message: 'Invalid bulk update', issues: parsed.error.issues } });
+    return;
+  }
+  const { ids, weight, order, enabled } = parsed.data;
+  const db = getDb();
+  const sets: string[] = [];
+  const values: (number)[] = [];
+  if (weight !== undefined) { sets.push('weight = ?'); values.push(weight); }
+  if (order !== undefined) { sets.push('key_order = ?'); values.push(order); }
+  if (enabled !== undefined) { sets.push('enabled = ?'); values.push(enabled ? 1 : 0); }
+  const statement = db.prepare(`UPDATE api_keys SET ${sets.join(', ')} WHERE id = ?`);
+  let updated = 0;
+  db.transaction(() => {
+    for (const id of ids) updated += statement.run(...values, id).changes;
+  })();
+  res.json({ success: true, updated });
 });
 
 // ── Action needed [fork 5/10] ───────────────────────────────────────────────
