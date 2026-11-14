@@ -79,49 +79,57 @@ export function up(db: Db): void {
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
     `);
-    // Seeded from the phrasings actually observed in provider error bodies. They
-    // are starting points an operator can edit or disable, not a closed list.
+    // Built-in rules carry the migration's own stamp rather than datetime('now'):
+    // a seed whose values come from the wall clock makes a migration
+    // non-deterministic, and the up/down/up round-trip check compares two ups
+    // that land in different seconds. Rules created later still default to
+    // datetime('now').
+    const SEEDED_AT = '2026-11-14 00:00:00';
     const insert = db.prepare(`
-      INSERT INTO action_rules (name, reason, statuses, pattern, url, policy)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO action_rules (name, reason, statuses, pattern, url, policy, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    insert.run(
+    const seed = (name: string, reason: string, statuses: string, pattern: string, url: string | null, policy: string) =>
+      insert.run(name, reason, statuses, pattern, url, policy, SEEDED_AT, SEEDED_AT);
+
+    // Seeded from the phrasings actually observed in provider error bodies.
+    seed(
       'Out of credits / balance',
       'add_card', '401,402,403',
       'insufficient (balance|credit|quota)|out of credit|no credit|payment required|billing',
       null, 'exclude_from_rotation',
     );
-    insert.run(
+    seed(
       'Phone verification',
       'verify_phone', '401,402,403',
       'verify your (phone|number)|phone verification|unverified (phone|account)',
       null, 'exclude_from_rotation',
     );
-    insert.run(
+    seed(
       'Terms of service',
       'accept_tos', '401,402,403',
       'accept (the )?(new )?terms|terms of (service|use)|tos (update|acceptance)',
       null, 'exclude_from_rotation',
     );
-    insert.run(
+    seed(
       'Captcha / challenge',
       'captcha', '401,402,403',
       'captcha|challenge required|human verification',
       null, 'exclude_from_rotation',
     );
-    insert.run(
+    seed(
       'Trial ended',
       'trial_expired', '401,402,403',
       'trial (has )?(expired|ended)|free trial over',
       null, 'exclude_from_rotation',
     );
-    insert.run(
+    seed(
       'Daily check-in',
       'daily_claim', '402',
       'daily check-?in|daily (bonus|claim)',
       null, 'exclude_from_rotation',
     );
-    insert.run(
+    seed(
       'Key revoked',
       'rotate_key', '401,403',
       'invalid api key|api key (revoked|deleted|expired)|key (was )?revoked',
