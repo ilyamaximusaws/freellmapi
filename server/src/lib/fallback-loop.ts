@@ -21,6 +21,7 @@ import type { RouteResult } from '../services/router.js';
 import { recordRateLimitHit, recordModelFailure, recordSuccess, hasOtherUsableKey, routableKeyIdsForModel, formatResetEta, isProviderMomentAttributionEnabled } from '../services/router.js';
 import { detectAction, noteKeySuccess } from '../services/action-needed.js';
 import { recordKeyHeaders, retryAfterCooldown } from '../services/key-limits.js';
+import { recordKeySuccess as recordPenaltySuccess, recordKeyFailure } from '../services/key-failure-penalty.js';
 import { runWithRateLimitCapture, takeCapturedRateLimitHeaders } from './rate-limit-headers.js';
 import { safeHeaderValue } from './header-value.js';
 import {
@@ -590,6 +591,13 @@ export function recordRetryableFailure(route: RouteResult, err: any, state: Fall
     // reason visible in the dashboard.
     if (errStatus === 429) retryAfterCooldown(route.keyId, err?.retryAfterMs);
   }
+  // [fork 8/10] Count real edge failures (timeout/stall/transport) toward the
+  // key's exponential penalty streak. A 429 never counts (see isStreakFailure),
+  // so quota facts stay on the cooldown ladder and this only ever fires for a
+  // key that is genuinely failing.
+  if (recordKeyFailure(route.keyId, err)) {
+    console.warn(`[Penalty] key ${route.keyId} crossed its failure-streak threshold — penalized (${route.platform}/${route.modelId})`);
+  }
   // Workers AI's daily neurons pool is per ACCOUNT: bench every model on every
   // token of the same account with this route's own duration and provenance.
   if (route.platform === 'cloudflare') benchCloudflareAccount(route.apiKey, err, decision.durationMs, decision.source);
@@ -754,6 +762,9 @@ export function recordUpstreamSuccess(route: RouteResult, rateLimitTokens: numbe
   // provider site is done: clear a one-shot action flag without waiting for
   // someone to press "done". Recurring flags keep their schedule.
   noteKeySuccess(route.keyId);
+  // [fork 8/10] A success proves the edge is alive: reset the failure streak and
+  // the penalty growth step, so the next failure starts from scratch.
+  recordPenaltySuccess(route.keyId);
 }
 
 // ── Attempt trail ─────────────────────────────────────────────────────────────

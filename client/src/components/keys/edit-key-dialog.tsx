@@ -15,6 +15,7 @@ import { GroupLabelField } from './group-label-field'
 import { capUsage } from './cap-usage'
 import { KeyCapsSection } from './key-caps-section'
 import { KeyCooldownSection } from './key-cooldown-section'
+import { KeyPenaltySection } from './key-penalty-section'
 
 type UpdateBody = {
   label?: string
@@ -30,6 +31,7 @@ type UpdateBody = {
   rpm?: number
   tpm?: number
   rpd?: number
+  rate?: import('../../../../shared/types').KeyRateSummary
   groupLabel?: string
   proxyUrl?: string
 }
@@ -381,6 +383,8 @@ export function EditKeyDialog({
           <KeyCapsSection apiKey={apiKey} />
 
           <KeyCooldownSection apiKey={apiKey} />
+
+          <KeyPenaltySection apiKey={apiKey} />
 
           {/* Per-key concurrency ([fork 2/10]): how many requests may be in
               flight against this credential at once. */}

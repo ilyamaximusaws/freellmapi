@@ -745,6 +745,20 @@ export function ProviderList({ onAddKey }: { onAddKey: () => void }) {
                                 {t('keys.rotationBadge', { weight: k.weight ?? 1, order: k.order ?? 0 })}
                               </Badge>
                             )}
+                            {/* [fork 8/10] Failure-streak penalty: the key is being
+                                skipped because it kept timing out. */}
+                            {k.penalty?.penalizedUntilMs != null && k.penalty.penalizedUntilMs > Date.now() && (
+                              <Badge
+                                variant="secondary"
+                                className={`text-[10px] text-amber-600 dark:text-amber-400 ${k.enabled ? '' : 'opacity-50'}`}
+                                title={t('keys.penaltyBadgeTitle', {
+                                  step: k.penalty.step,
+                                  until: new Date(k.penalty.penalizedUntilMs).toLocaleTimeString(),
+                                })}
+                              >
+                                {t('keys.penaltyBadge')}
+                              </Badge>
+                            )}
                             {/* #1403 phase 3: the provider-reported balance (#1403).
                                 Amber at ≤20% left — the same low-balance signal the
                                 Quota outlook panel gives, but visible where the operator

@@ -34,6 +34,7 @@ import { checkKeyCaps, reserveKeyCaps, isCapSoftPressured } from './key-caps.js'
 import { excludedKeyIds } from './action-needed.js';
 import { usesWeighting, orderKeysByWeight, effectiveKeyWeight } from './key-weight.js';
 import { checkKeyRateLimits } from './key-limits.js';
+import { isKeyPenalized } from './key-failure-penalty.js';
 import { cloudflareNeuronsAvailable } from './cloudflare-neurons.js';
 import { applyModelWeightOverride, getModelWeightOverrides } from './model-weight-overrides.js';
 import { modelsWithOverriddenField, getCatalogModelTombstone } from './model-state.js';
@@ -114,6 +115,7 @@ export function summarizeExhaustion(
     // [fork 5/10] Distinct bucket: a flagged key is not "no key configured" —
     // the operator has one, and the fix is on the provider's site.
     else if (l.includes('need action on the provider site')) bump('key needs action on the provider site');
+    else if (l.includes('key-penalty')) bump('key in penalty cooldown');
     else if (/no enabled\+healthy key|no usable key|decrypt-error/.test(l)) bump('no usable key configured');
     else if (l.includes('< estimated')) bump('prompt too large for the model');
     else if (l.includes('no vision support')) bump('model lacks vision');
@@ -126,6 +128,7 @@ export function summarizeExhaustion(
   // Most actionable buckets first.
   const order = [
     'key needs action on the provider site',
+    'key in penalty cooldown',
     'rate-limited or on cooldown',
     'no usable key configured',
     'prompt too large for the model',
@@ -1749,6 +1752,10 @@ function selectKeyForModel(entry: ChainRow, estimatedTokens: number, skipKeys?: 
       const keyLimit = checkKeyRateLimits(key.id);
       if (!keyLimit.allowed) { note(keyLimit.reason); continue; }
     }
+    // [fork 8/10] A key whose edge is timing out repeatedly is skipped while its
+    // exponential penalty runs. A 429 does not count, so rate-limiting keeps
+    // using the cooldown ladder instead of the penalty streak.
+    if (isKeyPenalized(key.id)) { note('key-penalty'); continue; }
     if (!canMakeRequest(entry.platform, entry.model_id, key.id, limits)) { note('rpm/rpd-limit'); continue; }
     if (!canUseTokens(entry.platform, entry.model_id, key.id, estimatedTokens, limits)) { note('tpm/tpd-limit'); continue; }
     if (!canUseProviderTokens(entry.platform, key.id, entry.model_id, estimatedTokens)) { note('provider-daily-token-cap'); continue; }

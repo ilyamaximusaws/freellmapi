@@ -26,6 +26,9 @@ import {
 import {
   keyRateSummary, setKeyCooldown, clearKeyCooldown, getKeyCooldown, listKeyCooldowns,
 } from '../services/key-limits.js';
+import {
+  penaltySnapshot, allPenaltySnapshots, clearKeyPenalty,
+} from '../services/key-failure-penalty.js';
 import { resolveCustomEndpointKey, customEndpointKeyIds, siblingEndpointKeyId, endpointHasCredential, normalizeGroupLabel, setCustomEndpointGroup } from '../services/custom-endpoint.js';
 import { registerCustomModels, registerCustomChatModels } from '../services/custom-model-register.js';
 import { registerCustomMediaModel } from '../services/custom-media-register.js';
@@ -508,6 +511,8 @@ keysRouter.get('/', (_req: Request, res: Response) => {
     // [fork 7/10] Key's own caps + live window usage + the provider's last word.
     const rate = keyRateSummary(Number(row.id));
     const keyCooldown = getKeyCooldown(Number(row.id));
+    // [fork 8/10] Failure-streak penalty state, so the row can say "in penalty".
+    const penalty = penaltySnapshot(Number(row.id));
     // Usage alongside the caps so the dashboard can show "342 of 1,000 this
     // month" instead of only the cap (OpenRouter's GET /api/v1/key returns
     // limit_remaining for the same reason).
@@ -526,6 +531,7 @@ keysRouter.get('/', (_req: Request, res: Response) => {
       caps: capSummary.caps,
       rate: rate,
       keyCooldown,
+      penalty,
       actionNeeded: action && !(action.snoozedUntilMs != null && action.snoozedUntilMs > Date.now())
         ? {
             id: action.id,
@@ -2129,6 +2135,27 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
   if (weight !== undefined) response.weight = weight;
   if (order !== undefined) response.order = order;
   res.json(response);
+});
+
+// ── Penalty state ([fork 8/10]) ─────────────────────────────────────────────
+// Read the failure-streak penalty ("in penalty", step, return time) and clear it
+// early from the dashboard.
+
+keysRouter.get('/penalties', (_req: Request, res: Response) => {
+  res.json({ penalties: allPenaltySnapshots() });
+});
+
+keysRouter.delete('/:id/penalty', (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: { message: 'Invalid key id' } });
+    return;
+  }
+  if (!clearKeyPenalty(id)) {
+    res.status(404).json({ error: { message: 'No penalty on this key' } });
+    return;
+  }
+  res.json({ success: true });
 });
 
 // ── Key-wide cooldowns and rate state [fork 7/10] ──────────────────────────

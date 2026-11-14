@@ -768,3 +768,40 @@ settingsRouter.put('/router', (req: Request, res: Response) => {
   }
   res.json(routerSettingsSnapshot());
 });
+
+// ── Penalty cooldown settings ([fork 8/10]) ─────────────────────────────────
+const penaltySettingsSchema = z.object({
+  penalty_streak_threshold: z.number().int().min(1).max(100).nullable().optional(),
+  penalty_steps_ms: z.string().trim().max(200).optional(),
+  penalty_ceiling_ms: z.number().int().min(1000).max(86_400_000).nullable().optional(),
+}).strict();
+
+settingsRouter.get('/penalty', (_req: Request, res: Response) => {
+  res.json({
+    penalty_streak_threshold: getSetting('penalty_streak_threshold') ?? '',
+    penalty_steps_ms: getSetting('penalty_steps_ms') ?? '',
+    penalty_ceiling_ms: getSetting('penalty_ceiling_ms') ?? '',
+  });
+});
+
+settingsRouter.put('/penalty', (req: Request, res: Response) => {
+  const parsed = penaltySettingsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: { message: `Invalid penalty settings: ${parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ')}` },
+    });
+    return;
+  }
+  const db = getDb();
+  for (const [key, value] of Object.entries(parsed.data) as [string, string | number | null | undefined][]) {
+    if (value === undefined) continue;
+    if (value === null || value === '') db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+    else setSetting(key, String(value));
+  }
+  res.json({
+    penalty_streak_threshold: getSetting('penalty_streak_threshold') ?? '',
+    penalty_steps_ms: getSetting('penalty_steps_ms') ?? '',
+    penalty_ceiling_ms: getSetting('penalty_ceiling_ms') ?? '',
+  });
+});
+

@@ -399,6 +399,17 @@ export interface KeyRateSummary {
   } | null;
 }
 
+/** [fork 8/10] The key's failure-streak penalty: where it is, and how far away
+ *  the trial request is. */
+export interface KeyPenaltyInfo {
+  keyId: number;
+  streak: number;
+  step: number;
+  penalizedUntilMs: number | null;
+  lastFailureMs: number | null;
+  lastSuccessMs: number | null;
+}
+
 /** [fork 7/10] A key-wide hold (manual or Retry-After) with its reason. */
 export interface KeyCooldownInfo {
   keyId: number;
@@ -500,6 +511,8 @@ export interface ApiKey {
   rate?: KeyRateSummary;
   /** [fork 7/10] Active key-wide cooldown (manual park or Retry-After 429). */
   keyCooldown?: KeyCooldownInfo | null;
+  /** [fork 8/10] Failure-streak penalty state (in memory; absent = clean). */
+  penalty?: KeyPenaltyInfo | null;
   /** The cap actually enforced after key → platform → global → setting. */
   effectiveMaxConcurrent?: number | null;
   /** Current UTC month's successful usage against the caps above, with the
