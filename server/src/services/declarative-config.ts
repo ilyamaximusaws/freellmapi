@@ -289,7 +289,8 @@ function registerCustomProvider(db: Db, input: z.infer<typeof customProviderSche
         supports_vision = excluded.supports_vision,
         supports_tools = excluded.supports_tools,
         key_id = excluded.key_id,
-        enabled = 1
+        enabled = 1,
+        disabled_by = NULL
     `).run(
       model.modelId,
       model.displayName,

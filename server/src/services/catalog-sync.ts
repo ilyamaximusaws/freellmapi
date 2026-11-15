@@ -507,24 +507,24 @@ function applyCatalogInner(db: Db, catalog: Catalog): NonNullable<SyncResult['co
   // transaction returns, so they cannot change underneath the loop.
   const newEvidence = catalogBringsNewEvidence(catalog);
 
-  const selectModel = db.prepare('SELECT id, enabled, source FROM models WHERE platform = ? AND model_id = ?');
+  const selectModel = db.prepare('SELECT id, enabled, disabled_by, source FROM models WHERE platform = ? AND model_id = ?');
   const updateModel = db.prepare(`
     UPDATE models SET
       display_name = @displayName, intelligence_rank = @intelligenceRank, speed_rank = @speedRank,
       size_label = @sizeLabel, rpm_limit = @rpm, rpd_limit = @rpd, tpm_limit = @tpm, tpd_limit = @tpd,
       monthly_token_budget = @monthlyTokenBudget, context_window = @contextWindow,
       supports_vision = @supportsVision, supports_tools = @supportsTools,
-      enabled = @enabled
+      enabled = @enabled, disabled_by = @disabledBy
     WHERE id = @id
   `);
   const adoptModel = db.prepare("UPDATE models SET source = 'catalog' WHERE id = ?");
   const insertModel = db.prepare(`
     INSERT INTO models (platform, model_id, display_name, intelligence_rank, speed_rank, size_label,
                         rpm_limit, rpd_limit, tpm_limit, tpd_limit, monthly_token_budget, context_window,
-                        enabled, supports_vision, supports_tools, source)
+                        enabled, disabled_by, supports_vision, supports_tools, source)
     VALUES (@platform, @modelId, @displayName, @intelligenceRank, @speedRank, @sizeLabel,
             @rpm, @rpd, @tpm, @tpd, @monthlyTokenBudget, @contextWindow,
-            @enabled, @supportsVision, @supportsTools, 'catalog')
+            @enabled, @disabledBy, @supportsVision, @supportsTools, 'catalog')
   `);
 
   // Generative-media models go to their own table (never the chat router's pool).
@@ -637,7 +637,7 @@ function applyCatalogInner(db: Db, catalog: Catalog): NonNullable<SyncResult['co
       inCatalog.add(`${m.platform}:${m.modelId}`);
 
       const row = selectModel.get(m.platform, m.modelId) as
-        | { id: number; enabled: number; source: string }
+        | { id: number; enabled: number; disabled_by: string | null; source: string }
         | undefined;
       // Collision rule: if the user hand-added a model and the catalog later
       // ships the same platform:model_id, the user row wins — the catalog
@@ -666,14 +666,38 @@ function applyCatalogInner(db: Db, catalog: Catalog): NonNullable<SyncResult['co
         supportsTools: m.supportsTools ? 1 : 0,
       };
       if (row) {
-        // Catalog disable wins (dead upstream); local disable also wins.
-        const enabled = m.enabled ? row.enabled : 0;
-        updateModel.run({ ...fields, id: row.id, enabled });
+        // Two different reasons share `enabled = 0`, and they must behave
+        // differently when the catalog starts listing the model as enabled
+        // again:
+        //   * the catalog withdrew it — the provider's state, so it round-trips
+        //     and the model goes back into rotation;
+        //   * a user or the admin API turned it off — a choice, which a catalog
+        //     refresh must never silently undo (documented in
+        //     docs/en/architecture/05-catalog-sync.md). `disabled_by` tells them
+        //     apart; NULL is a row from before the column existed, read as a
+        //     local disable so existing installs keep today's behaviour.
+        let enabled: number;
+        let disabledBy: string | null;
+        if (!m.enabled) {
+          enabled = 0;
+          disabledBy = 'catalog';
+        } else if (row.disabled_by === 'catalog') {
+          enabled = 1;
+          disabledBy = null;
+        } else {
+          enabled = row.enabled;
+          disabledBy = row.disabled_by;
+        }
+        updateModel.run({ ...fields, id: row.id, enabled, disabledBy });
         refreshModelOverrideBaselines(db, m.platform, m.modelId);
         applyModelOverrides(db, m.platform, m.modelId);
         counts.updated++;
       } else {
-        insertModel.run({ ...fields, platform: m.platform, modelId: m.modelId, enabled: m.enabled ? 1 : 0 });
+        insertModel.run({
+          ...fields, platform: m.platform, modelId: m.modelId,
+          enabled: m.enabled ? 1 : 0,
+          disabledBy: m.enabled ? null : 'catalog',
+        });
         refreshModelOverrideBaselines(db, m.platform, m.modelId);
         applyModelOverrides(db, m.platform, m.modelId);
         counts.inserted++;

@@ -60,6 +60,26 @@ const CARRIED_COLUMNS = [
   'supports_tools', 'paid_input_per_m', 'paid_output_per_m', 'source',
 ].join(', ');
 
+// Columns added to `models` by LATER migrations must survive this rebuild too.
+// Each entry is [name, suffix appended to the column list]. The suffix matches
+// the text ALTER TABLE ADD COLUMN leaves behind — same line, `, name TYPE` — so
+// the rebuilt CREATE statement is byte-identical to the one the forward chain
+// produced. Appended only when the live table already has the column, so a
+// database that predates one (the normal case while the chain runs forward,
+// since this migration is older) is unaffected.
+const LATER_COLUMNS: ReadonlyArray<readonly [name: string, suffix: string]> = [
+  ['disabled_by', ', disabled_by TEXT'],
+];
+
+function laterModelColumns(db: Db): { names: string; declarations: string } {
+  const columns = db.prepare('PRAGMA table_info(models)').all() as { name: string }[];
+  const present = LATER_COLUMNS.filter(([name]) => columns.some(col => col.name === name));
+  return {
+    names: present.map(([name]) => `, ${name}`).join(''),
+    declarations: present.map(([, suffix]) => suffix).join(''),
+  };
+}
+
 // Tables whose rows must survive the DROP. Discovered from the schema rather
 // than hard-coded, so a table added later that references models is carried too.
 function childTablesOfModels(db: Db): string[] {
@@ -75,6 +95,8 @@ function childTablesOfModels(db: Db): string[] {
 }
 
 function rebuildModels(db: Db, extraColumns: string, copiedColumns: string, unique: string): void {
+  const later = laterModelColumns(db);
+  const allCopiedColumns = `${copiedColumns}${later.names}`;
   const children = childTablesOfModels(db);
   // AUTOINCREMENT's high-water mark. DROP TABLE takes the sqlite_sequence row
   // with it, and copying rows back only pushes the counter to the highest id
@@ -90,11 +112,11 @@ function rebuildModels(db: Db, extraColumns: string, copiedColumns: string, uniq
   }
 
   db.exec(`
-    CREATE TABLE models_endpoint_identity (${MODELS_COLUMNS}${extraColumns},
+    CREATE TABLE models_endpoint_identity (${MODELS_COLUMNS}${extraColumns}${later.declarations},
       ${unique}
     );
-    INSERT INTO models_endpoint_identity (${copiedColumns})
-      SELECT ${copiedColumns} FROM models;
+    INSERT INTO models_endpoint_identity (${allCopiedColumns})
+      SELECT ${allCopiedColumns} FROM models;
     DROP TABLE models;
     ALTER TABLE models_endpoint_identity RENAME TO models;
   `);

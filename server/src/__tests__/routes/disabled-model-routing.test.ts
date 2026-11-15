@@ -252,4 +252,27 @@ describe('disabled models are never routed (#634)', () => {
       expect(res.body.error.code).toBe('model_not_found');
     });
   });
+
+  describe('switching a model back on', () => {
+    // Disabling clears the chain in every profile and drops models.enabled;
+    // enabling has to undo BOTH or the model stays out of rotation forever —
+    // the "I switched it back on and nothing changed" report. `disabled_by`
+    // records who turned it off so the catalog sync can tell a provider's
+    // withdrawal (which round-trips) from a user's choice (which is sticky).
+    it('restores rotation and records the source of the disable', async () => {
+      expect((await request('PATCH', `/api/models/${alphaId}`, { enabled: false })).status).toBe(200);
+      expect(getDb().prepare('SELECT enabled, disabled_by FROM models WHERE id = ?').get(alphaId))
+        .toEqual({ enabled: 0, disabled_by: 'user' });
+      expect(getDb().prepare('SELECT enabled FROM profile_models WHERE model_db_id = ?').get(alphaId))
+        .toEqual({ enabled: 0 });
+      expect(resolveRoutingChain('auto:smart').chain.map(r => r.model_db_id)).not.toContain(alphaId);
+
+      expect((await request('PATCH', `/api/models/${alphaId}`, { enabled: true })).status).toBe(200);
+      expect(getDb().prepare('SELECT enabled, disabled_by FROM models WHERE id = ?').get(alphaId))
+        .toEqual({ enabled: 1, disabled_by: null });
+      expect(getDb().prepare('SELECT enabled FROM profile_models WHERE model_db_id = ?').get(alphaId))
+        .toEqual({ enabled: 1 });
+      expect(resolveRoutingChain('auto:smart').chain.map(r => r.model_db_id)).toContain(alphaId);
+    });
+  });
 });

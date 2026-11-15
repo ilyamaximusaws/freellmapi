@@ -75,6 +75,7 @@ type ModelRow = {
   model_id: string;
   key_id: number | null;
   source: string;
+  enabled: number;
 };
 
 function dbValue(key: keyof typeof MODEL_FIELD_COLUMNS, value: unknown): unknown {
@@ -84,7 +85,7 @@ function dbValue(key: keyof typeof MODEL_FIELD_COLUMNS, value: unknown): unknown
 
 function fetchModelRow(id: number): ModelRow | undefined {
   return getDb()
-    .prepare('SELECT id, platform, model_id, key_id, source FROM models WHERE id = ?')
+    .prepare('SELECT id, platform, model_id, key_id, source, enabled FROM models WHERE id = ?')
     .get(id) as ModelRow | undefined;
 }
 
@@ -313,6 +314,15 @@ modelsRouter.patch('/:id', (req: Request, res: Response) => {
       values.push(id);
       db.prepare(`UPDATE models SET ${assignments.join(', ')} WHERE id = ?`).run(...values);
 
+      // Who turned the model off matters when the provider's catalog starts
+      // listing it as enabled again: a catalog disable round-trips back into
+      // rotation, a user's/API's disable is a choice and stays put. Recording it
+      // here keeps `models.enabled = 0` unambiguous (see the catalog-sync docs).
+      if (modelPatch.enabled !== undefined) {
+        db.prepare('UPDATE models SET disabled_by = ? WHERE id = ?')
+          .run(modelPatch.enabled ? null : 'user', id);
+      }
+
       if (isCatalogManagedModel(row)) {
         const overridePatch: ModelOverridePatch = {};
         for (const key of [
@@ -330,6 +340,17 @@ modelsRouter.patch('/:id', (req: Request, res: Response) => {
       if (disablesModel) {
         db.prepare('UPDATE profile_models SET enabled = 0 WHERE model_db_id = ?').run(id);
         pruneUnavailableSavedFusionConfig();
+      } else if (modelPatch.enabled === true && row.enabled === 0) {
+        // Disabling cleared the chain in every profile, so enabling a model that
+        // was actually off has to put it back — otherwise it stays out of
+        // rotation forever, which is exactly the "switched it back on and
+        // nothing changed" report. The `row.enabled === 0` guard keeps a no-op
+        // `enabled: true` from forcing the chain back on for a model whose
+        // chain the operator had deliberately switched off. Both tables are
+        // written because the router reads profile_models when a profile is
+        // active and fallback_config when it is not.
+        db.prepare('UPDATE profile_models SET enabled = 1 WHERE model_db_id = ?').run(id);
+        db.prepare('UPDATE fallback_config SET enabled = 1 WHERE model_db_id = ?').run(id);
       }
     }
 

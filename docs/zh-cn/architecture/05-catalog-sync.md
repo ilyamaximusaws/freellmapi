@@ -86,12 +86,25 @@ const verified = crypto.verify(null, bytes, catalogPublicKey(), Buffer.from(sign
 | 规则 | 行为 |
 |------|---------|
 | 元数据（名、秩、限额、上下文、能力） | 跟目录走，**除非**用户有显式本地覆盖 |
-| `enabled: false` | **强制禁用**（模型上游已死） |
-| `enabled: true` | **永不重启用**用户关掉的模型 |
+| `enabled: false` | **强制禁用**（模型上游已死）—— 并记 `models.disabled_by = 'catalog'` |
+| `enabled: true` | **只**重启用目录自己禁用的模型；用户/接口禁用的永不重启用 |
 | 用户建行（`source = 'user'`） | **永不更新、永不删除、永不收养** —— `platform:model_id` 撞车时用户行胜、目录条目跳过 |
 | 用户删过的目录模型 | 经**墓碑**（`catalog_model_tombstones` 表）保持删除 |
 | 自动退役（410/寿终） | **禁用、不删** —— 目录里再出现 enabled 就解除退役（#634） |
 | 目录里消失的模型 | **删除**（先 fallback_config、FK 顺序） |
+
+### 禁用来源（`disabled_by`）
+
+`models.enabled = 0` 有两种含义，目录再变时不能同样处理：
+
+- **目录**把模型撤了 —— 这是供应商的状态，要能来回：后续目录再把它列为
+  enabled 就回到轮换；
+- **用户或管理接口**把它关了 —— 这是主动选择，目录刷新绝不能悄悄撤销。
+
+`models.disabled_by`（`'catalog'`、`'user'` 或 NULL）记录是哪一种。NULL 表示
+「该列存在之前就被禁用了」，按本地禁用处理，所以升级不会影响装机里已经关掉的
+模型。管理接口（`PATCH /api/models/:id`）禁用时写 `'user'`、启用时清空；
+目录同步写 `'catalog'`、重启用时清空。
 
 ### 来源列（`source`）
 

@@ -151,6 +151,62 @@ describe('applyCatalog', () => {
     expect(row.enabled).toBe(0);
   });
 
+  it('round-trips a catalog disable: the provider listing the model enabled again restores it', () => {
+    const models = existingAsCatalogModels();
+    const target = models.find((m) => m.modelId === 'brand-new-model')!;
+
+    // The provider withdraws the model.
+    target.enabled = false;
+    applyCatalog(getDb(), catalogOf(models));
+    let row = getDb()
+      .prepare("SELECT enabled, disabled_by FROM models WHERE platform = 'groq' AND model_id = 'brand-new-model'")
+      .get() as { enabled: number; disabled_by: string | null };
+    expect(row.enabled).toBe(0);
+    expect(row.disabled_by).toBe('catalog');
+
+    // A later catalog lists it as enabled again — newer evidence that it is back.
+    target.enabled = true;
+    applyCatalog(getDb(), catalogOf(models));
+    row = getDb()
+      .prepare("SELECT enabled, disabled_by FROM models WHERE platform = 'groq' AND model_id = 'brand-new-model'")
+      .get() as typeof row;
+    expect(row.enabled).toBe(1);
+    expect(row.disabled_by).toBeNull();
+  });
+
+  it('does not re-enable a locally disabled model when the catalog lists it as enabled', () => {
+    const models = existingAsCatalogModels();
+    const target = models.find((m) => m.modelId === 'brand-new-model')!;
+
+    // A row disabled before `disabled_by` existed (NULL) is read as a local
+    // disable, so an install that upgrades keeps its current behaviour.
+    getDb()
+      .prepare("UPDATE models SET enabled = 0, disabled_by = NULL WHERE platform = 'groq' AND model_id = 'brand-new-model'")
+      .run();
+    target.enabled = true;
+    applyCatalog(getDb(), catalogOf(models));
+
+    const row = getDb()
+      .prepare("SELECT enabled, disabled_by FROM models WHERE platform = 'groq' AND model_id = 'brand-new-model'")
+      .get() as { enabled: number; disabled_by: string | null };
+    expect(row.enabled).toBe(0);
+    expect(row.disabled_by).toBeNull();
+  });
+
+  it('marks a model the catalog inserts as disabled with the catalog as its source', () => {
+    const models = existingAsCatalogModels();
+    models.push(baseModel({ modelId: 'withdrawn-at-birth', enabled: false }));
+
+    const counts = applyCatalog(getDb(), catalogOf(models));
+    expect(counts.inserted).toBe(1);
+
+    const row = getDb()
+      .prepare("SELECT enabled, disabled_by FROM models WHERE platform = 'groq' AND model_id = 'withdrawn-at-birth'")
+      .get() as { enabled: number; disabled_by: string | null };
+    expect(row.enabled).toBe(0);
+    expect(row.disabled_by).toBe('catalog');
+  });
+
   it('removes models that left the catalog (and their fallback rows)', () => {
     const models = existingAsCatalogModels().filter((m) => m.modelId !== 'brand-new-model');
     const before = getDb()

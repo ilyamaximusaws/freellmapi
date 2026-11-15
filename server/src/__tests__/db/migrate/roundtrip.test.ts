@@ -62,6 +62,7 @@ const KEY_WEIGHT_ORDER_FILENAME = '20261114_000005_key_weight_order.ts';
 const KEY_RATE_LIMITS_FILENAME = '20261114_000006_key_rate_limits.ts';
 const KEY_METADATA_NOTIFICATIONS_FILENAME = '20261114_000007_key_metadata_notifications.ts';
 const AUDIT_LOG_FILENAME = '20261114_000008_audit_log.ts';
+const MODEL_DISABLED_BY_FILENAME = '20261115_000009_model_disabled_by.ts';
 
 interface SchemaRow {
   type: string;
@@ -171,6 +172,7 @@ describe('migration round trip', () => {
         KEY_RATE_LIMITS_FILENAME,
         KEY_METADATA_NOTIFICATIONS_FILENAME,
         AUDIT_LOG_FILENAME,
+        MODEL_DISABLED_BY_FILENAME,
       ]);
     } finally {
       db.close();

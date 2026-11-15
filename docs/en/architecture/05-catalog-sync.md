@@ -86,12 +86,29 @@ Applied inside **one transaction** (`applyCatalog`):
 | Rule | Behavior |
 |------|----------|
 | Metadata (name, ranks, limits, context, capabilities) | Tracks catalog **unless** user has explicit local override |
-| `enabled: false` | **Force-disables** (model dead upstream) |
-| `enabled: true` | **Never re-enables** a model the user turned off |
+| `enabled: false` | **Force-disables** (model dead upstream) — and records `models.disabled_by = 'catalog'` |
+| `enabled: true` | Re-enables **only** a model the catalog itself disabled; a user/API disable is never re-enabled |
 | User-created rows (`source = 'user'`) | **Never updated, never deleted, never adopted** — on `platform:model_id` collision, user row wins, catalog entry skipped |
 | Catalog models user deleted | Stay deleted via **tombstones** (`catalog_model_tombstones` table) |
 | Auto-retired (410/end-of-life) | **Disabled, not deleted** — catalog listing them enabled lifts retirement (#634) |
 | Models vanished from catalog | **Deleted** (fallback_config first, FK order) |
+
+### Disable Provenance (`disabled_by`)
+
+`models.enabled = 0` has two very different meanings, and they must not behave
+the same when the catalog changes again:
+
+- the **catalog** withdrew the model — the provider's state, so it round-trips:
+  a later catalog that lists the model enabled puts it back in rotation;
+- a **user or the admin API** turned it off — a deliberate choice, which a
+  catalog refresh must never silently undo.
+
+`models.disabled_by` (`'catalog'`, `'user'`, or NULL) records which one it was.
+NULL means "disabled before this column existed" and is read as a local
+disable, so upgrading an install changes nothing about the models it already
+had switched off. The admin API (`PATCH /api/models/:id`) writes `'user'` when
+it disables a model and clears the column when it enables it again; the
+catalog sync writes `'catalog'` and clears it on re-enable.
 
 ### Provenance Column (`source`)
 
