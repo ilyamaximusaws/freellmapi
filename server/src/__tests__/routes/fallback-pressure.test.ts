@@ -111,4 +111,36 @@ describe('Router pressure controls (#952)', () => {
     expect(high.body.error.message).toMatch(/at most/);
     expect(getCooldownCeilingMs()).toBeNull();
   });
+
+  it('Router pressure hides benches of disabled keys and drops them when the key is deleted', async () => {
+    const db = getDb();
+    const enc = encrypt('test-key-disabled');
+    const extraId = Number(db.prepare(`
+      INSERT INTO api_keys (platform, encrypted_key, iv, auth_tag, label, status, enabled)
+      VALUES (?, ?, ?, ?, 'pressure-disabled', 'healthy', 1)
+    `).run(platform, enc.encrypted, enc.iv, enc.authTag).lastInsertRowid);
+    setCooldown(platform, modelId, extraId, 60 * 60_000, 'heuristic');
+
+    const chipsFor = (body: any) => body.rows.flatMap((r: any) => r.cooldowns).filter((c: any) => c.keyId === extraId);
+
+    const enabledView = await request(app, 'GET', '/api/fallback/penalty-inspector');
+    expect(chipsFor(enabledView.body)).toHaveLength(1);
+
+    // Switched off (what the provider toggle does): the bench routes nothing, so it is not shown.
+    db.prepare('UPDATE api_keys SET enabled = 0 WHERE id = ?').run(extraId);
+    const disabledView = await request(app, 'GET', '/api/fallback/penalty-inspector');
+    expect(chipsFor(disabledView.body)).toHaveLength(0);
+
+    // Back on: the bench is still real and shows again.
+    db.prepare('UPDATE api_keys SET enabled = 1 WHERE id = ?').run(extraId);
+    const reenabledView = await request(app, 'GET', '/api/fallback/penalty-inspector');
+    expect(chipsFor(reenabledView.body)).toHaveLength(1);
+
+    // Deleted: the bench dies with the key instead of lingering as an orphan.
+    const del = await request(app, 'DELETE', `/api/keys/${extraId}`);
+    expect(del.status).toBe(200);
+    expect(isOnCooldown(platform, modelId, extraId)).toBe(false);
+    const orphans = db.prepare('SELECT COUNT(*) AS n FROM rate_limit_cooldowns WHERE key_id = ?').get(extraId) as { n: number };
+    expect(orphans.n).toBe(0);
+  });
 });

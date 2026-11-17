@@ -33,6 +33,7 @@ import {
   getKeyMetadata, setKeyMetadata, tagSummary, bulkApplyToTag,
 } from '../services/key-metadata.js';
 import { recordAudit } from '../services/audit-log.js';
+import { pruneUnavailableSavedFusionConfig } from '../services/fusion.js';
 import { resolveCustomEndpointKey, customEndpointKeyIds, siblingEndpointKeyId, endpointHasCredential, normalizeGroupLabel, setCustomEndpointGroup } from '../services/custom-endpoint.js';
 import { registerCustomModels, registerCustomChatModels } from '../services/custom-model-register.js';
 import { registerCustomMediaModel } from '../services/custom-media-register.js';
@@ -1959,6 +1960,9 @@ keysRouter.delete('/:id', (req: Request, res: Response) => {
     db.prepare('DELETE FROM media_models WHERE key_id = ?').run(id);
   });
   remove();
+  // Benches die with their key: left behind they show in Router pressure for
+  // up to a day, and the per-key reset 404s because the key is gone.
+  clearCooldownsForKey(id);
 
   res.json({ success: true });
 });
@@ -1998,6 +2002,60 @@ keysRouter.patch('/platform/:platform', (req: Request, res: Response) => {
 });
 
 // Update key (toggle enable/disable or edit label)
+// The model list a key shows as checkboxes ("which models does this endpoint
+// serve") is stored as `model_scope_json`, but nothing used to write it back to
+// the models themselves: every unchecked model stayed `enabled = 1` and sat in
+// the chain as a live entry the router refuses to route (out-of-scope key).
+// From the operator's side that is "I switched these models off and they are
+// still there" — 178 rows in one endpoint's case.
+//
+// Only rows BOUND to the key (`models.key_id`) are touched. Those are endpoint
+// rows that can only ever route through this one key, so scope is the whole
+// truth for them. A shared catalog row (key_id NULL) can still route through a
+// sibling key that does have it in scope, so it stays alone.
+//
+// Provenance matters in both directions: the disable is recorded as
+// `disabled_by = 'scope'`, and only such a row is restored when it comes back
+// into scope. A model the operator switched off by hand ('user') or the catalog
+// withdrew ('catalog') is never resurrected by an unrelated scope edit.
+function syncKeyBoundModelsToScope(
+  db: Db,
+  keyId: number,
+  scope: string[] | null,
+): { disabled: number; restored: number } {
+  const rows = db.prepare('SELECT id, model_id, enabled, disabled_by FROM models WHERE key_id = ?')
+    .all(keyId) as { id: number; model_id: string; enabled: number; disabled_by: string | null }[];
+  if (rows.length === 0) return { disabled: 0, restored: 0 };
+
+  const allowed = scope === null ? null : new Set(scope);
+  const disableModel = db.prepare("UPDATE models SET enabled = 0, disabled_by = 'scope' WHERE id = ?");
+  const restoreModel = db.prepare('UPDATE models SET enabled = 1, disabled_by = NULL WHERE id = ?');
+  // Both tables: the router reads profile_models with a profile active and
+  // fallback_config when none is (same asymmetry PATCH /api/models handles).
+  const chainOff = db.prepare('UPDATE profile_models SET enabled = 0 WHERE model_db_id = ?');
+  const globalOff = db.prepare('UPDATE fallback_config SET enabled = 0 WHERE model_db_id = ?');
+  const chainOn = db.prepare('UPDATE profile_models SET enabled = 1 WHERE model_db_id = ?');
+  const globalOn = db.prepare('UPDATE fallback_config SET enabled = 1 WHERE model_db_id = ?');
+
+  let disabled = 0;
+  let restored = 0;
+  for (const row of rows) {
+    const inScope = allowed === null || allowed.has(row.model_id);
+    if (!inScope && row.enabled === 1) {
+      disableModel.run(row.id);
+      chainOff.run(row.id);
+      globalOff.run(row.id);
+      disabled++;
+    } else if (inScope && row.enabled === 0 && row.disabled_by === 'scope') {
+      restoreModel.run(row.id);
+      chainOn.run(row.id);
+      globalOn.run(row.id);
+      restored++;
+    }
+  }
+  return { disabled, restored };
+}
+
 keysRouter.patch('/:id', (req: Request, res: Response) => {
   const id = parseInt(req.params.id as string, 10);
   if (isNaN(id)) {
@@ -2017,7 +2075,8 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
   const beforeAudit = getDb().prepare(`
     SELECT enabled, label, weight, key_order, rpm_limit, tpm_limit, rpd_limit,
            monthly_request_cap, monthly_token_cap, max_concurrent, owner, note,
-           key_type, credits_remaining, expires_at, expire_reminder_days, tags
+           key_type, credits_remaining, expires_at, expire_reminder_days, tags,
+           model_scope_json
       FROM api_keys WHERE id = ?
   `).get(id) as Record<string, unknown> | undefined;
   const updates: string[] = [];
@@ -2144,20 +2203,28 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
 
   // Re-submitting the same key satisfies "something changed" but is a no-op;
   // it must not turn into an invalid UPDATE with an empty SET list.
-  const result = db.transaction(() => {
+  const { changes, scopeSync } = db.transaction(() => {
     const changes = updates.length === 0
       ? 1
       : db.prepare(`UPDATE api_keys SET ${updates.join(', ')} WHERE id = ?`).run(...values).changes;
     if (changes > 0 && groupLabel !== undefined) setCustomEndpointGroup(db, id, normalizeGroupLabel(groupLabel));
-    return { changes };
+    // Same transaction as the scope write: a half-applied scope (saved on the
+    // key, models untouched) is exactly the state this fixes.
+    const scopeSync = changes > 0 && modelScope !== undefined
+      ? syncKeyBoundModelsToScope(db, id, scopeIds.length > 0 ? scopeIds : null)
+      : null;
+    return { changes, scopeSync };
   })();
 
-  if (result.changes === 0) {
+  if (changes === 0) {
     res.status(404).json({ error: { message: 'Key not found' } });
     return;
   }
 
   if (changedKey !== undefined) clearCooldownsForKey(id);
+
+  // A model the scope just switched off must not linger in a saved Fusion pick.
+  if (scopeSync && scopeSync.disabled > 0) pruneUnavailableSavedFusionConfig();
 
   let metadata = null;
   if (metadataPatchGiven) {
@@ -2193,6 +2260,22 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
     if (expiresAt !== undefined) auditField('expires_at', beforeAudit.expires_at, expiresAt);
     if (expireReminderDays !== undefined) auditField('expire_reminder_days', beforeAudit.expire_reminder_days, expireReminderDays);
     if (tags !== undefined) auditField('tags', beforeAudit.tags, tags != null ? JSON.stringify(tags) : null);
+    // The scope itself plus what it did to the models: "I unticked 177 models"
+    // and "177 models left the chain" belong in the same trail.
+    if (modelScope !== undefined) {
+      auditField('model_scope_json', beforeAudit.model_scope_json, scopeIds.length > 0 ? JSON.stringify(scopeIds) : null);
+      if (scopeSync) {
+        recordAudit({
+          actor: (req as Request & { user?: { email?: string } }).user?.email,
+          entityType: 'api_keys',
+          entityId: id,
+          action: 'update',
+          field: 'model_scope_models',
+          oldValue: null,
+          newValue: JSON.stringify(scopeSync),
+        });
+      }
+    }
   }
 
   if (enabled !== undefined) response.enabled = enabled;
@@ -2200,6 +2283,7 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
   if (proxyUrl !== undefined) response.maskedProxyUrl = maskProxyUrl(proxyUrl);
   if (key !== undefined) response.maskedKey = maskKey(key);
   if (modelScope !== undefined) response.modelScope = scopeIds.length > 0 ? scopeIds : null;
+  if (scopeSync) response.scopeSync = scopeSync;
   if (groupLabel !== undefined) response.groupLabel = normalizeGroupLabel(groupLabel);
   if (weight !== undefined) response.weight = weight;
   if (order !== undefined) response.order = order;

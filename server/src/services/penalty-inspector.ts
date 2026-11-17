@@ -169,6 +169,9 @@ export function getPenaltyInspector(): PenaltyInspectorSnapshot {
       LEFT JOIN fallback_config fc ON fc.model_db_id = m.id
       LEFT JOIN api_keys ak ON ak.id = c.key_id
      WHERE c.expires_at_ms > ?
+       -- A bench on a deleted or switched-off key routes nothing: the router
+       -- never picks that key, so it is not pressure on the pool.
+       AND ak.id IS NOT NULL AND ak.enabled = 1
      ORDER BY c.expires_at_ms ASC
   `).all(now) as Array<{
     platform: string;
@@ -215,6 +218,8 @@ export function getPenaltyInspector(): PenaltyInspectorSnapshot {
       LEFT JOIN api_keys ak ON ak.id = r.key_id
      WHERE r.status = 'error'
        AND r.created_at >= ?
+       -- Keyless failures stay; failures of a deleted or disabled key do not.
+       AND (r.key_id IS NULL OR ak.enabled = 1)
      ORDER BY r.created_at DESC, r.id DESC
      LIMIT 250
   `).all(since) as Array<{

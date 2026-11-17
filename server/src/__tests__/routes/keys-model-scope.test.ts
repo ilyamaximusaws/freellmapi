@@ -116,4 +116,73 @@ describe('Keys API — model scope', () => {
     const patch = await request(app, 'PATCH', '/api/keys/999999', { modelScope: ['m1'] });
     expect(patch.status).toBe(404);
   });
+
+  // The provider's "edit models" checkboxes write `modelScope` and nothing else.
+  // Unticked models used to keep `enabled = 1` and stayed in the chain, so the
+  // dashboard showed them as live entries the router refuses to route.
+  describe('scope drives the models bound to the key', () => {
+    function bindModel(keyId: number, modelId: string, priority: number, opts: { enabled?: number; disabledBy?: string | null } = {}) {
+      const db = getDb();
+      const inserted = db.prepare(`
+        INSERT INTO models (platform, model_id, display_name, intelligence_rank, speed_rank, size_label,
+          monthly_token_budget, context_window, enabled, supports_vision, supports_tools, key_id, disabled_by)
+        VALUES ('custom', ?, ?, ?, ?, 'Small', '~1M', 128000, ?, 0, 1, ?, ?)
+      `).run(modelId, modelId, priority, priority, opts.enabled ?? 1, keyId, opts.disabledBy ?? null);
+      const modelDbId = Number(inserted.lastInsertRowid);
+      db.prepare('INSERT INTO fallback_config (model_db_id, priority, enabled) VALUES (?, ?, 1)').run(modelDbId, priority);
+      return modelDbId;
+    }
+
+    const modelRow = (modelDbId: number) =>
+      getDb().prepare('SELECT enabled, disabled_by FROM models WHERE id = ?').get(modelDbId) as { enabled: number; disabled_by: string | null };
+    const chainRow = (modelDbId: number) =>
+      getDb().prepare('SELECT enabled FROM fallback_config WHERE model_db_id = ?').get(modelDbId) as { enabled: number };
+
+    it('disables out-of-scope models, drops them from the chain, and restores them when the scope widens', async () => {
+      const id = insertKey();
+      const keep = bindModel(id, 'keep-me', 1);
+      const drop = bindModel(id, 'drop-me', 2);
+
+      const patch = await request(app, 'PATCH', `/api/keys/${id}`, { modelScope: ['keep-me'] });
+      expect(patch.status).toBe(200);
+      expect(patch.body.scopeSync).toEqual({ disabled: 1, restored: 0 });
+
+      expect(modelRow(keep)).toEqual({ enabled: 1, disabled_by: null });
+      expect(modelRow(drop)).toEqual({ enabled: 0, disabled_by: 'scope' });
+      expect(chainRow(drop).enabled).toBe(0);
+
+      // The chain the dashboard renders only lists enabled models.
+      const chainView = await request(app, 'GET', '/api/fallback');
+      expect(chainView.status).toBe(200);
+      expect(JSON.stringify(chainView.body)).toContain('keep-me');
+      expect(JSON.stringify(chainView.body)).not.toContain('drop-me');
+
+      // Clearing the scope restores what the scope itself switched off.
+      const cleared = await request(app, 'PATCH', `/api/keys/${id}`, { modelScope: null });
+      expect(cleared.body.scopeSync).toEqual({ disabled: 0, restored: 1 });
+      expect(modelRow(drop)).toEqual({ enabled: 1, disabled_by: null });
+      expect(chainRow(drop).enabled).toBe(1);
+    });
+
+    it('leaves a model the user switched off by hand alone', async () => {
+      const id = insertKey();
+      const manual = bindModel(id, 'manual-off', 1, { enabled: 0, disabledBy: 'user' });
+
+      const patch = await request(app, 'PATCH', `/api/keys/${id}`, { modelScope: ['manual-off'] });
+      expect(patch.status).toBe(200);
+      expect(patch.body.scopeSync).toEqual({ disabled: 0, restored: 0 });
+      expect(modelRow(manual)).toEqual({ enabled: 0, disabled_by: 'user' });
+    });
+
+    it('touches no model that is not bound to the key', async () => {
+      const id = insertKey();
+      const other = insertKey();
+      const shared = bindModel(other, 'shared-model', 1);
+
+      const patch = await request(app, 'PATCH', `/api/keys/${id}`, { modelScope: ['something-else'] });
+      expect(patch.status).toBe(200);
+      expect(patch.body.scopeSync).toEqual({ disabled: 0, restored: 0 });
+      expect(modelRow(shared)).toEqual({ enabled: 1, disabled_by: null });
+    });
+  });
 });
