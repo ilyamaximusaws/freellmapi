@@ -22,6 +22,7 @@
  * table, so what is loud is configuration, not code.
  */
 import { getDb, getSetting, setSetting } from '../db/index.js';
+import { upstreamIdentityOfKey } from '../lib/endpoint-scope.js';
 
 export const NOTIFY_EVENTS = [
   'key_error',
@@ -333,18 +334,24 @@ export async function runNotificationSweep(now = Date.now()): Promise<NotifyResu
   // ready_upstreams below the configured minimum.
   const settings = getNotificationSettings();
   if (settings.readyUpstreamsMin > 0) {
-    const agg = db.prepare(`
-      SELECT COUNT(DISTINCT CASE WHEN status IN ('healthy', 'unknown') THEN platform END) AS ready
-        FROM api_keys WHERE enabled = 1
-    `).get() as { ready: number };
-    const ready = agg.ready ?? 0;
-    const platforms = (db.prepare(`
-      SELECT DISTINCT platform FROM api_keys WHERE enabled = 1
-    `).all() as Array<{ platform: string }>).map(row => row.platform);
+    // Same upstream identity as /readyz: relays are independent upstreams, so a
+    // three-relay pool must not read as one 'custom' provider and trip a minimum
+    // the operator set for three.
+    const rows = db.prepare('SELECT platform, base_url, status FROM api_keys WHERE enabled = 1')
+      .all() as { platform: string; base_url: string | null; status: string }[];
+    const present = new Set<string>();
+    const live = new Set<string>();
+    for (const row of rows) {
+      const upstream = upstreamIdentityOfKey(row.platform, row.base_url);
+      present.add(upstream);
+      if (row.status === 'healthy' || row.status === 'unknown') live.add(upstream);
+    }
+    const upstreams = [...present].sort();
+    const ready = live.size;
     if (ready < settings.readyUpstreamsMin) {
       results.push(notify('ready_upstreams_low', {
-        title: `${ready}/${platforms.length} upstreams ready (below ${settings.readyUpstreamsMin})`,
-        body: platforms.join(', ') || '(none configured)',
+        title: `${ready}/${upstreams.length} upstreams ready (below ${settings.readyUpstreamsMin})`,
+        body: upstreams.join(', ') || '(none configured)',
         dedupKey: `ready_upstreams_low:${ready}`,
       }, now));
     }

@@ -17,13 +17,13 @@ const {
 
 let nextId = 40000;
 
-function seedKey(platform: string, opts: { status?: string; enabled?: number } = {}): number {
+function seedKey(platform: string, opts: { status?: string; enabled?: number; baseUrl?: string } = {}): number {
   const id = ++nextId;
   const enc = encrypt(`deg-${id}`);
   getDb().prepare(`
-    INSERT INTO api_keys (id, platform, label, encrypted_key, iv, auth_tag, enabled, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, platform, `deg-${id}`, enc.encrypted, enc.iv, enc.authTag, opts.enabled ?? 1, opts.status ?? 'healthy');
+    INSERT INTO api_keys (id, platform, label, encrypted_key, iv, auth_tag, enabled, status, base_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, platform, `deg-${id}`, enc.encrypted, enc.iv, enc.authTag, opts.enabled ?? 1, opts.status ?? 'healthy', opts.baseUrl ?? null);
   return id;
 }
 
@@ -162,5 +162,38 @@ describe('degraded-mode state machine', () => {
     const status = getDegradationStatus();
     expect(status.totalProviders).toBe(1);
     expect(status.state).toBe('normal');
+  });
+
+  it('treats independent custom relays as separate upstreams that can degrade', () => {
+    // The audit case: four relays, one live. Counted by platform string this
+    // was a single 'custom' provider at ratio 1/1 — normal, forever.
+    seedKey('custom', { status: 'healthy', baseUrl: 'https://relay-a.example.com/v1' });
+    seedKey('custom', { status: 'error', baseUrl: 'https://relay-b.example.com/v1' });
+    seedKey('custom', { status: 'error', baseUrl: 'https://relay-c.example.com/v1' });
+    seedKey('custom', { status: 'error', baseUrl: 'https://relay-d.example.com/v1' });
+
+    const snap = computeHealthSnapshot();
+    expect(snap.totalProviders).toBe(4);
+    expect(snap.healthyProviders).toBe(1);
+    expect(snap.ratio).toBeCloseTo(0.25);
+
+    expect(updateDegradationState(0).state).toBe('normal'); // grace period
+    const degraded = updateDegradationState(60_000);
+    expect(degraded.state).toBe('degraded');
+    expect(isDegraded()).toBe(true);
+  });
+
+  it('pools several credentials of one relay into a single upstream', () => {
+    // Two keys for the same base_url are one upstream, not two: a relay with a
+    // dead second credential is not a degraded pool of two providers.
+    seedKey('custom', { status: 'healthy', baseUrl: 'https://relay-a.example.com/v1' });
+    seedKey('custom', { status: 'error', baseUrl: 'https://relay-a.example.com/v1/' }); // trailing slash
+    seedKey('custom', { status: 'error', baseUrl: 'https://relay-b.example.com/v1' });
+    seedKey('custom', { status: 'error', baseUrl: 'https://relay-c.example.com/v1' });
+    seedKey('custom', { status: 'error', baseUrl: 'https://relay-d.example.com/v1' });
+
+    const snap = computeHealthSnapshot();
+    expect(snap.totalProviders).toBe(4);
+    expect(snap.healthyProviders).toBe(1);
   });
 });

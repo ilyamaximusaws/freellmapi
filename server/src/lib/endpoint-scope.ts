@@ -26,6 +26,30 @@ export function normalizeBaseUrl(raw: string): string {
   return raw.trim().replace(/\/+$/, '');
 }
 
+/**
+ * The unit a provider-level failure rules out: one catalog platform, or ONE
+ * custom relay. Every relay is stored under platform = 'custom', so skipping by
+ * platform alone crossed out healthy sibling relays along with the sick one
+ * (a 5xx on relay A took relays B, C and D out of the same request).
+ *
+ * Un-scoped rows keep the bare platform, so every catalog platform — and the
+ * legacy custom rows that predate per-endpoint binding — behaves exactly as
+ * before. Used for the request-scoped skip set and for counting ready upstreams
+ * in /readyz and the degradation state machine.
+ */
+export function upstreamIdentity(platform: string, endpointScope: string | null | undefined): string {
+  return endpointScope ? `${platform}@${endpointScope}` : platform;
+}
+
+/**
+ * The upstream a key row belongs to. Only custom keys are endpoint-scoped: a
+ * catalog key's base_url (when it has one) is the platform's own endpoint, not
+ * an independent upstream, and counting it would inflate the ready total.
+ */
+export function upstreamIdentityOfKey(platform: string, baseUrl: string | null | undefined): string {
+  return upstreamIdentity(platform, platform === 'custom' ? endpointScopeForBaseUrl(baseUrl) : '');
+}
+
 /** The scope token for a custom endpoint; '' means "not endpoint-scoped". */
 export function endpointScopeForBaseUrl(baseUrl: string | null | undefined): string {
   return baseUrl ? normalizeBaseUrl(baseUrl) : '';

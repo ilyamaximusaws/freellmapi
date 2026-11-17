@@ -69,6 +69,7 @@ import { getRequestTrace, newRequestTrace, runWithRequestTrace, type AttemptOutc
 import { logRequest, persistRequestAttempts } from './request-log.js';
 import { withKeyProxy } from './proxy.js';
 import { getEndpointTimeBudgetMs } from './ttfb-budget.js';
+import { upstreamIdentity } from './endpoint-scope.js';
 import { learnOutputCapFromError, learnedOutputCap } from './output-cap.js';
 
 // Every surface caps failover hops at the same number.
@@ -528,14 +529,15 @@ export function recordRetryableFailure(route: RouteResult, err: any, state: Fall
   }
   state.skipKeys.add(`${route.platform}:${route.modelId}:${route.keyId}`);
   // #788: provider-level failures (5xx / timeout / transport / degraded) mean
-  // the PROVIDER is sick, not this key — every key AND every model of that
-  // platform would fail identically. Rule out the whole platform for this
-  // request so the loop moves to the NEXT provider instead of burning one
-  // failover hop per key. Key-scoped failures (auth/quota) stay on the
-  // single-key path, and the per-key cooldown below is still the only thing
-  // that outlives the request.
+  // the UPSTREAM is sick, not this key — every key AND every model behind it
+  // would fail identically. Rule out that upstream for this request so the loop
+  // moves to the NEXT one instead of burning one failover hop per key.
+  // Key-scoped failures (auth/quota) stay on the single-key path, and the
+  // per-key cooldown below is still the only thing that outlives the request.
+  // The upstream is endpoint-scoped: relays all share platform 'custom' (#651),
+  // so a platform-wide skip would cross out healthy sibling relays too.
   if (isProviderLevelError(err)) {
-    state.skipPlatforms.add(route.platform);
+    state.skipPlatforms.add(upstreamIdentity(route.platform, route.endpointScope));
   }
   // An adapter's own "cannot serve this" rejection (#1876: Gizmo asked for
   // tools or images, a catalog id outside an adapter's tested allow-list) is a
@@ -644,9 +646,11 @@ export function recordRetryableFailure(route: RouteResult, err: any, state: Fall
   // separately. Bench the key across the platform's catalog in one go, and
   // rule the platform out for the rest of this request: a sibling key would
   // be a different account, but with the budget already spent on this one
-  // the next PROVIDER is the better hop.
+  // the next PROVIDER is the better hop. Scoped to the endpoint for the same
+  // reason as the provider-level skip above: one relay's suspended account
+  // says nothing about the account behind another relay.
   if (isAccountSuspendedError(err)) {
-    state.skipPlatforms.add(route.platform);
+    state.skipPlatforms.add(upstreamIdentity(route.platform, route.endpointScope));
     benchKeyAcrossPlatform(route, decision.durationMs, decision.source, state, 'reports the account suspended');
   } else if (isPaymentRequiredError(err)) {
     // A 402 is the ACCOUNT's balance, not one model's (#1239: one broke

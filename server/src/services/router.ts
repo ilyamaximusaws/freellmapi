@@ -46,7 +46,7 @@ import { getActiveProfileId } from './profile-models.js';
 import { getClientContext } from '../lib/client-context.js';
 import { customEndpointKeyIds } from './custom-endpoint.js';
 import { isDegraded } from './degradation.js';
-import { modelStatsKey, endpointScopeForBaseUrl } from '../lib/endpoint-scope.js';
+import { modelStatsKey, endpointScopeForBaseUrl, upstreamIdentity } from '../lib/endpoint-scope.js';
 import { isToolBenched } from '../lib/tool-capability.js';
 import { parseModelScope, scopeAllows } from '../lib/model-scope.js';
 import { getKeyQuotaHeadroom, inferQuotaPoolKey } from './provider-quota.js';
@@ -2447,7 +2447,7 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
       // Mirror the main loop's gates below so exploration only samples
       // candidates that can actually serve this request.
       if (skipModels?.has(e.model_db_id)) return false;
-      if (skipPlatforms?.has(e.platform)) return false;
+      if (skipPlatforms?.has(upstreamIdentity(e.platform, e.endpoint_scope))) return false;
       if (requireVision && !e.supports_vision) return false;
       if (requireTools && !e.supports_tools) return false;
       // Never spend the exploration slot on a model that keeps rejecting tool
@@ -2569,12 +2569,13 @@ export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, pre
     // same dead route (PR #111, credits @barbotkonv).
     if (skipModels?.has(entry.model_db_id)) { diag.push(`${label}: ruled out earlier this request`); continue; }
 
-    // Platforms the caller has ruled out wholesale (#788): a provider-level
-    // failure this request — a 5xx, a timeout, a dead socket — is about the
-    // PROVIDER, so its other keys and its other models would fail the same way.
-    // Skipping the platform moves failover to the next provider instead of
-    // burning one hop per key. Request-scoped; nothing is benched by this.
-    if (skipPlatforms?.has(entry.platform)) { diag.push(`${label}: provider ruled out earlier this request`); continue; }
+    // Upstreams the caller has ruled out (#788): a provider-level failure this
+    // request — a 5xx, a timeout, a dead socket — is about the UPSTREAM, so its
+    // other keys and its other models would fail the same way. Skipping it moves
+    // failover to the next upstream instead of burning one hop per key.
+    // Request-scoped; nothing is benched by this. The identity is the endpoint
+    // for custom relays, so one sick relay never rules out its healthy siblings.
+    if (skipPlatforms?.has(upstreamIdentity(entry.platform, entry.endpoint_scope))) { diag.push(`${label}: upstream ruled out earlier this request`); continue; }
 
     // Vision requests skip text-only models — including a sticky/preferred one,
     // which is correct: don't pin an image turn to a model that can't see it.

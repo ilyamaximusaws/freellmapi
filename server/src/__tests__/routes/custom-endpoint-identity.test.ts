@@ -6,7 +6,8 @@ import { routePinnedModel, routeRequest, resolveModelGroupCandidates, refreshSta
 import { setCooldown, isOnCooldown, clearCooldownsForKey } from '../../services/ratelimit.js';
 import { getModelGroups, resolveRequestedIdToMembers, setUnifyOverrides } from '../../services/model-groups.js';
 import { noteModelRetirementSignal, resetModelRetirementObservations } from '../../services/model-retirement.js';
-import { endpointHandle, qualifiedModelMemberId } from '../../lib/endpoint-scope.js';
+import { endpointHandle, qualifiedModelMemberId, upstreamIdentity } from '../../lib/endpoint-scope.js';
+import { newFallbackState, recordRetryableFailure } from '../../lib/fallback-loop.js';
 import { logRequest } from '../../lib/request-log.js';
 import { buildModelListing } from '../../services/model-listing.js';
 import { mintDashboardToken, isGatedApiPath } from '../helpers/auth.js';
@@ -258,6 +259,105 @@ describe('per-endpoint identity for custom relay models (#651)', () => {
          ORDER BY id DESC LIMIT 1
       `).get(SHARED_MODEL) as { model_db_id: number };
       expect(loggedA.model_db_id).toBe(a.id);
+    });
+  });
+
+  describe('failover between relays when one is sick', () => {
+    // The provider-level skip is what moves a request off a sick upstream. It
+    // used to be keyed on the platform string, and every relay shares platform
+    // 'custom' — so relay A's 5xx ruled out relay B too, and a pool of two
+    // relays had no failover at all.
+    function failRelay(modelDbId: number, keyId: number, scope: string, err: Error & { status?: number }) {
+      const state = newFallbackState();
+      const decision = { source: 'heuristic', durationMs: 3000 };
+      recordRetryableFailure(
+        { platform: 'custom', modelId: SHARED_MODEL, modelDbId, keyId, endpointScope: scope } as any,
+        err, state, decision as any,
+      );
+      return state;
+    }
+
+    function routeWithSkip(skip: Set<string>) {
+      const ids = resolveRequestedIdToMembers(SHARED_MODEL, getModelGroups())!;
+      return routeRequest(1000, undefined, undefined, false, false, undefined,
+        resolveModelGroupCandidates(ids), false, skip);
+    }
+
+    it('a 5xx on one relay rules out only that relay, and the other serves', async () => {
+      await registerBothRelays(app);
+      const a = rowOn(RELAY_A);
+      const b = rowOn(RELAY_B);
+      try {
+        const state = failRelay(a.id, a.key_id!, RELAY_A, Object.assign(new Error('HTTP 502: upstream unavailable'), { status: 502 }));
+
+        expect(state.skipPlatforms.has('custom')).toBe(false);
+        expect([...state.skipPlatforms]).toEqual([upstreamIdentity('custom', RELAY_A)]);
+
+        const route = routeWithSkip(state.skipPlatforms);
+        expect(route.modelDbId).toBe(b.id);
+        expect(route.endpointScope).toBe(RELAY_B);
+        route.release?.();
+      } finally {
+        clearCooldownsForKey(a.key_id!);
+        clearCooldownsForKey(b.key_id!);
+      }
+    });
+
+    it('a timeout on one relay leaves the other reachable', async () => {
+      await registerBothRelays(app);
+      const a = rowOn(RELAY_A);
+      const b = rowOn(RELAY_B);
+      try {
+        const state = failRelay(a.id, a.key_id!, RELAY_A, new Error('upstream timeout: read ETIMEDOUT'));
+        const toB = routeWithSkip(state.skipPlatforms);
+        expect(toB.modelDbId).toBe(b.id);
+        toB.release?.();
+      } finally {
+        clearCooldownsForKey(a.key_id!);
+        clearCooldownsForKey(b.key_id!);
+      }
+    });
+
+    it('the mirror case: a timeout on relay B routes to relay A', async () => {
+      await registerBothRelays(app);
+      const a = rowOn(RELAY_A);
+      const b = rowOn(RELAY_B);
+      try {
+        const state = failRelay(b.id, b.key_id!, RELAY_B, new Error('upstream timeout: read ETIMEDOUT'));
+        expect([...state.skipPlatforms]).toEqual([upstreamIdentity('custom', RELAY_B)]);
+        const toA = routeWithSkip(state.skipPlatforms);
+        expect(toA.modelDbId).toBe(a.id);
+        toA.release?.();
+      } finally {
+        clearCooldownsForKey(a.key_id!);
+        clearCooldownsForKey(b.key_id!);
+      }
+    });
+
+    it('a suspended account rules out only the relay that reported it', async () => {
+      await registerBothRelays(app);
+      const a = rowOn(RELAY_A);
+      const b = rowOn(RELAY_B);
+      try {
+        const state = failRelay(a.id, a.key_id!, RELAY_A, Object.assign(new Error('account has been suspended'), { status: 403 }));
+        expect([...state.skipPlatforms]).toEqual([upstreamIdentity('custom', RELAY_A)]);
+        const route = routeWithSkip(state.skipPlatforms);
+        expect(route.modelDbId).toBe(b.id);
+        route.release?.();
+      } finally {
+        clearCooldownsForKey(a.key_id!);
+        clearCooldownsForKey(b.key_id!);
+      }
+    });
+
+    it('still rules out a whole catalog platform, which has no endpoint scope', () => {
+      const state = newFallbackState();
+      recordRetryableFailure(
+        { platform: 'groq', modelId: 'llama-3.3-70b', modelDbId: 1, keyId: 1, endpointScope: '' } as any,
+        Object.assign(new Error('HTTP 502'), { status: 502 }), state,
+        { source: 'heuristic', durationMs: 3000 } as any,
+      );
+      expect([...state.skipPlatforms]).toEqual(['groq']);
     });
   });
 

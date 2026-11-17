@@ -6,6 +6,7 @@ import { isEncryptionKeyInitialized } from '../lib/crypto.js';
 import { extractApiToken, timingSafeStringEqual } from './proxy.js';
 import { getProvider } from '../providers/index.js';
 import { getSoonestCooldownExpiry } from '../services/ratelimit.js';
+import { upstreamIdentityOfKey } from '../lib/endpoint-scope.js';
 import { getQuotaStateForKeys } from '../services/provider-quota.js';
 import {
   getQuotaForecast,
@@ -72,15 +73,20 @@ statusRouter.get('/readyz', (_req: Request, res: Response) => {
   }
 
   const db = getDb();
-  const agg = db.prepare(`
-    SELECT
-      COUNT(*) AS enabled_keys,
-      COUNT(DISTINCT CASE WHEN status IN ('healthy', 'unknown') THEN platform END) AS ready_upstreams
-    FROM api_keys
-    WHERE enabled = 1
-  `).get() as { enabled_keys: number; ready_upstreams: number };
+  // Count ready UPSTREAMS, not distinct platform strings: every custom relay is
+  // stored under platform 'custom', so four independent relays used to report
+  // ready_upstreams = 1. A relay is one upstream; a catalog platform is one.
+  const rows = db.prepare('SELECT platform, base_url, status FROM api_keys WHERE enabled = 1')
+    .all() as { platform: string; base_url: string | null; status: string }[];
+  const enabledKeys = rows.length;
+  const ready = new Set<string>();
+  for (const row of rows) {
+    if (row.status === 'healthy' || row.status === 'unknown') {
+      ready.add(upstreamIdentityOfKey(row.platform, row.base_url));
+    }
+  }
 
-  const readyUpstreams = agg.ready_upstreams ?? 0;
+  const readyUpstreams = ready.size;
   if (readyUpstreams > 0) {
     res.json({ status: 'ok', ready_upstreams: readyUpstreams });
     return;
@@ -89,7 +95,7 @@ statusRouter.get('/readyz', (_req: Request, res: Response) => {
   // Distinguish "nothing configured" from "everything cooling down" from
   // "everything unhealthy" so the caller can act on the specific reason.
   let reason: string;
-  if ((agg.enabled_keys ?? 0) === 0) {
+  if (enabledKeys === 0) {
     reason = 'no_upstreams_configured';
   } else if (getSoonestCooldownExpiry() != null) {
     reason = 'all_upstreams_rate_limited';

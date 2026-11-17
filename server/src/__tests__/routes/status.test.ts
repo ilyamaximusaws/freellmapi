@@ -106,4 +106,26 @@ describe('status & interop endpoints (#433)', () => {
     for (const m of realModels) expect(m.available).toBe(true);
     expect(ready.body.data.length).toBeLessThanOrEqual(full.body.data.length);
   });
+
+  it('GET /readyz counts every custom relay as its own upstream', async () => {
+    // Four independent relays, all stored under platform 'custom'. Counting
+    // distinct platform strings reported 2 here (groq + one 'custom').
+    for (const host of ['relay-a', 'relay-b', 'relay-c', 'relay-d']) {
+      const secret = encrypt(`${host}-key`);
+      getDb().prepare(`
+        INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled, base_url)
+        VALUES ('custom', ?, ?, ?, ?, 'healthy', 1, ?)
+      `).run(host, secret.encrypted, secret.iv, secret.authTag, `https://${host}.example.com/v1`);
+    }
+    const { status, body } = await request(app, 'GET', '/readyz');
+    expect(status).toBe(200);
+    expect(body.ready_upstreams).toBe(5); // groq + four relays
+  });
+
+  it('GET /readyz reports only the relays that are actually live (1 of 4)', async () => {
+    getDb().prepare("UPDATE api_keys SET status = 'unhealthy' WHERE platform = 'custom' AND label != 'relay-a'").run();
+    const { status, body } = await request(app, 'GET', '/readyz');
+    expect(status).toBe(200);
+    expect(body.ready_upstreams).toBe(2); // groq + relay-a
+  });
 });

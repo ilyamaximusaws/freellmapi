@@ -1,4 +1,5 @@
 import { getDb } from '../db/index.js';
+import { upstreamIdentityOfKey } from '../lib/endpoint-scope.js';
 
 /**
  * Global degraded-mode state machine (#904).
@@ -81,16 +82,21 @@ let lastSnapshot: HealthSnapshot | null = null;
 export function computeHealthSnapshot(): HealthSnapshot {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT platform, status
+    SELECT platform, base_url, status
     FROM api_keys
     WHERE enabled = 1
-  `).all() as { platform: string; status: string }[];
+  `).all() as { platform: string; base_url: string | null; status: string }[];
 
+  // Providers here are UPSTREAMS: one per custom relay, one per catalog
+  // platform. Four independent relays are four upstreams that can degrade
+  // independently, not one 'custom' provider that never drops below the
+  // minimum — which is why a custom-only pool used to stay 'normal' forever.
   const usable = new Set<string>();
   const present = new Set<string>();
   for (const row of rows) {
-    present.add(row.platform);
-    if (HEALTHY_STATUSES.has(row.status)) usable.add(row.platform);
+    const upstream = upstreamIdentityOfKey(row.platform, row.base_url);
+    present.add(upstream);
+    if (HEALTHY_STATUSES.has(row.status)) usable.add(upstream);
   }
 
   const totalProviders = present.size;

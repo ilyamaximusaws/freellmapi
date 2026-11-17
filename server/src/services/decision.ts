@@ -1,4 +1,5 @@
 import { getDb } from '../db/index.js';
+import { upstreamIdentity, endpointScopeOfKey } from '../lib/endpoint-scope.js';
 import { BEATAPI_BASE_URL } from '../providers/beatapi.js';
 import { APINEX_BASE_URL } from '../providers/apinex.js';
 import { BLOCKRUN_BASE_URL } from '../providers/blockrun.js';
@@ -640,7 +641,15 @@ export function decisionsAvailable(): boolean {
 
 function decisionChain(model: string | undefined, skipPlatforms?: ReadonlySet<string>, extraction = false): DecisionModelRow[] {
   const enabled = allDecisionRows().filter(r => r.enabled === 1 && ADAPTERS[r.platform] && (r.model_id === CLAIRIC_MODEL) === extraction);
-  if (!model || model === 'auto') return skipPlatforms ? enabled.filter(r => !skipPlatforms.has(r.platform)) : enabled;
+  if (!model || model === 'auto') {
+    if (!skipPlatforms) return enabled;
+    // Same upstream identity the main router uses: a custom decision model is
+    // ruled out by its own relay's failure, not by a sibling relay's.
+    const db = getDb();
+    return enabled.filter(r => !skipPlatforms.has(
+      upstreamIdentity(r.platform, r.platform === 'custom' ? endpointScopeOfKey(db, r.key_id) : ''),
+    ));
+  }
   const pinned = enabled.filter(r => r.model_id === model);
   if (pinned.length === 0) {
     const known = allDecisionRows().some(r => r.model_id === model);
