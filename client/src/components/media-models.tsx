@@ -7,7 +7,6 @@ import { ConfirmButton } from '@/components/confirm-button'
 import { EmptyState } from '@/components/empty-state'
 import { CardSkeleton } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/page-header'
-import { ModelsTabs } from '@/components/models-tabs'
 import { UsageSummaryCard } from '@/components/usage-summary-card'
 import { useI18n } from '@/i18n'
 
@@ -202,7 +201,7 @@ export function MediaModelsView({ modality }: { modality: 'image' | 'video' | 'a
 
   return (
     <div>
-      <PageHeader title={title} description={description} divider={false} actions={<ModelsTabs />} />
+      <PageHeader title={title} description={description} divider={false} />
 
       <div className="space-y-4">
         {modality === 'audio' && <h2 className="text-sm font-medium">{t('models.ttsHeading')}</h2>}

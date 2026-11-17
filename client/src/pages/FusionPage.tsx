@@ -11,7 +11,6 @@ import { Badge } from '@/components/ui/badge'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { PageHeader } from '@/components/page-header'
 import { FloatingBar } from '@/components/floating-bar'
-import { ModelsTabs } from '@/components/models-tabs'
 import { useI18n } from '@/i18n'
 
 type Mode = 'auto' | 'explicit'
@@ -134,7 +133,6 @@ export default function FusionPage() {
         title={t('fusion.title')}
         description={t('fusion.description')}
         divider={false}
-        actions={<ModelsTabs />}
       />
 
       {isLoading ? (

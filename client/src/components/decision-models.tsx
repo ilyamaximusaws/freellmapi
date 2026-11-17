@@ -11,7 +11,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { EmptyState } from '@/components/empty-state'
 import { CardSkeleton } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/page-header'
-import { ModelsTabs } from '@/components/models-tabs'
 import { CodeBlock } from '@/components/code-block'
 import { useI18n } from '@/i18n'
 import {
@@ -203,7 +202,7 @@ export function DecisionModelsView() {
 
   return (
     <div>
-      <PageHeader title={t('models.title')} description={t('decision.pageDesc')} divider={false} actions={<ModelsTabs />} />
+      <PageHeader title={t('models.title')} description={t('decision.pageDesc')} divider={false} />
 
       <div className="space-y-4">
         <p className="text-xs text-muted-foreground">

@@ -10,7 +10,7 @@ import { ThemeContext, type Theme } from '@/theme-context'
 function getStoredTheme(): Theme {
   if (typeof window === 'undefined') return 'system'
   const stored = window.localStorage.getItem('theme')
-  return stored === 'light' || stored === 'dark' ? stored : 'system'
+  return stored === 'light' || stored === 'system' ? stored : 'dark'
 }
 
 function getSystemDark(): boolean {

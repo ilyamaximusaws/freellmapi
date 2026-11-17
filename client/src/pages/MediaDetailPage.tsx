@@ -5,7 +5,6 @@ import { useI18n } from '@/i18n'
 import { apiFetch } from '@/lib/api'
 import { CopyButton } from '@/components/copy-button'
 import { PageHeader } from '@/components/page-header'
-import { ModelsTabs } from '@/components/models-tabs'
 import { Switch } from '@/components/ui/switch'
 import { apiBaseUrl, ApiUsageBlock } from '@/components/api-usage'
 import type { MediaModel } from '@/components/media-models'
@@ -75,7 +74,7 @@ export default function MediaDetailPage({ modality }: { modality: 'image' | 'vid
 
   return (
     <div>
-      <PageHeader title={label || t('models.providersHeading')} description={t('models.providersHeading')} divider={false} actions={<ModelsTabs />} />
+      <PageHeader title={label || t('models.providersHeading')} description={t('models.providersHeading')} divider={false} />
 
       <div className="space-y-6">
         <Link to={modality === 'transcription' ? '/models/audio' : `/models/${modality}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">

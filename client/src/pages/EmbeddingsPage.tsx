@@ -22,7 +22,6 @@ import { CardSkeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { PageHeader } from '@/components/page-header'
 import { FloatingBar } from '@/components/floating-bar'
-import { ModelsTabs } from '@/components/models-tabs'
 import { UsageSummaryCard } from '@/components/usage-summary-card'
 import { useI18n } from '@/i18n'
 
@@ -253,7 +252,6 @@ export default function EmbeddingsPage() {
         title={t('embeddings.title')}
         description={t('embeddings.description')}
         divider={false}
-        actions={<ModelsTabs />}
       />
 
       <div className="space-y-6">

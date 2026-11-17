@@ -363,14 +363,14 @@ function formatTokens(n?: number): string {
 
 function Stat({ icon: Icon, label, value, sub, hint, className }: { icon: LucideIcon; label: string; value: string | number; sub?: string; hint?: string; className?: string }) {
   const card = (
-    <div className="rounded-3xl border bg-card px-4 py-3">
+    <div className="rounded-2xl border bg-card px-4 py-4 shadow-sm">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-[11px] text-muted-foreground uppercase tracking-wider">{label}</p>
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-          <Icon className="size-3.5" aria-hidden="true" />
+        <p className="text-[10px] font-medium uppercase tracking-[0.09em] text-muted-foreground">{label}</p>
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <Icon className="size-4" aria-hidden="true" />
         </span>
       </div>
-      <p className={`text-xl font-semibold tabular-nums mt-1 ${className ?? ''}`}>{value}</p>
+      <p className={`mt-2 text-2xl font-semibold tracking-[-0.035em] tabular-nums ${className ?? ''}`}>{value}</p>
       {/* Optional second figure, so one card can carry two related numbers
           instead of spending another slot in the summary row. */}
       {sub ? <p className="text-[11px] text-muted-foreground tabular-nums truncate">{sub}</p> : null}
@@ -383,15 +383,15 @@ function Stat({ icon: Icon, label, value, sub, hint, className }: { icon: Lucide
 
 function Panel({ icon: Icon, title, actions, children }: { icon: LucideIcon; title: string; actions?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="rounded-3xl border bg-card">
-      <div className="px-4 py-3 border-b flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-medium">
-          <Icon className="size-4 text-muted-foreground" aria-hidden="true" />
+    <div className="rounded-2xl border bg-card shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-5 py-4">
+        <h3 className="flex items-center gap-2 text-sm font-medium tracking-[-0.01em]">
+          <Icon className="size-4 text-primary" aria-hidden="true" />
           {title}
         </h3>
         {actions}
       </div>
-      <div className="p-4">{children}</div>
+      <div className="p-5">{children}</div>
     </div>
   )
 }

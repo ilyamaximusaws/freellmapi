@@ -6,17 +6,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <script>
       try {
-        // Mirrors the ThemeProvider's resolution: 'system' (or nothing stored)
-        // follows the OS preference. Keep in sync with src/theme.tsx.
+        // Dark is the product default; an explicit light/system choice wins.
+        // Keep in sync with src/theme.tsx.
         const theme = localStorage.getItem('theme')
         const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-        const dark = theme === 'dark' || (theme !== 'light' && prefersDark)
+        const dark = theme === 'dark' || !theme || (theme === 'system' && prefersDark)
         if (dark) {
           document.documentElement.classList.add('dark')
         }
         document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
         document.documentElement.dataset.themeChoice =
-          theme === 'dark' || theme === 'light' ? theme : 'system'
+          theme === 'dark' || theme === 'light' || theme === 'system' ? theme : 'dark'
         // Same idea for text direction; keep in sync with RTL_LOCALES in
         // src/i18n/locale-config.ts.
         const locale = localStorage.getItem('freellmapi.locale')

@@ -12,14 +12,14 @@ export function PageHeader({
   divider?: boolean
 }) {
   return (
-    <div className={`flex flex-wrap md:flex-nowrap items-end justify-between gap-6 mb-6 ${divider ? 'pb-6 border-b' : ''}`}>
-      <div className="min-w-0">
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+    <header className={`page-header flex flex-wrap items-end justify-between gap-x-6 gap-y-4 md:flex-nowrap ${divider ? 'mb-8 border-b border-border/70 pb-7' : 'mb-7'}`}>
+      <div className="min-w-0 max-w-3xl">
+        <h1 className="text-[26px] font-semibold leading-tight tracking-[-0.035em] text-foreground">{title}</h1>
         {description && (
-          <p className="text-sm text-muted-foreground mt-1">{description}</p>
+          <p className="mt-2 max-w-2xl text-[13px] leading-6 text-muted-foreground">{description}</p>
         )}
       </div>
-      {actions && <div className="flex max-w-full flex-wrap items-center gap-2 shrink-0">{actions}</div>}
-    </div>
+      {actions && <div className="page-header-actions flex max-w-full shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+    </header>
   )
 }

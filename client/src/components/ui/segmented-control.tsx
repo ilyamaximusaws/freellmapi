@@ -23,7 +23,7 @@ export function SegmentedControl<T extends string>({
   className?: string
 }) {
   return (
-    <div role="tablist" aria-label={ariaLabel} className={cn('inline-flex max-w-full gap-1 overflow-x-auto rounded-xl border p-1 [&>button]:shrink-0', className)}>
+    <div role="tablist" aria-label={ariaLabel} className={cn('inline-flex max-w-full gap-1 overflow-x-auto rounded-xl border border-border/80 bg-muted/30 p-1 shadow-inner [&>button]:shrink-0', className)}>
       {options.map(o => (
         <button
           key={o.value}
@@ -31,9 +31,9 @@ export function SegmentedControl<T extends string>({
           role="tab"
           aria-selected={value === o.value}
           onClick={() => onValueChange(o.value)}
-          className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-colors ${
+          className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-all duration-200 ${
             value === o.value
-              ? 'bg-foreground text-background font-medium'
+              ? 'bg-primary text-primary-foreground font-medium shadow-sm shadow-primary/10'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted'
           }`}
         >

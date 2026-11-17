@@ -3,7 +3,6 @@ import { apiFetch } from '@/lib/api'
 import { Switch } from '@/components/ui/switch'
 import { CardSkeleton } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/page-header'
-import { ModelsTabs } from '@/components/models-tabs'
 import { UsageSummaryCard } from '@/components/usage-summary-card'
 import { useI18n } from '@/i18n'
 import { engineChain, freeFromDate, invalidateSearchQueries, type SearchAnalytics, type SearchEngine } from '@/lib/search'
@@ -145,7 +144,7 @@ export function SearchEnginesView() {
 
   return (
     <div>
-      <PageHeader title={t('models.title')} description={t('search.pageDesc')} divider={false} actions={<ModelsTabs />} />
+      <PageHeader title={t('models.title')} description={t('search.pageDesc')} divider={false} />
 
       <div className="space-y-4">
         <p className="text-xs text-muted-foreground">

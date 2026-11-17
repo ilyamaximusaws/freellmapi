@@ -14,7 +14,6 @@ import { CopyButton } from '@/components/copy-button'
 import { TableSkeleton } from '@/components/ui/skeleton'
 import { Tooltip } from '@/components/tooltip'
 import { PageHeader } from '@/components/page-header'
-import { ModelsTabs } from '@/components/models-tabs'
 import { ModelTableHead, RateLimitBadge, RowContent } from '@/components/model-table'
 import {
   groupQuotaBadge,
@@ -234,7 +233,7 @@ export default function ModelDetailPage() {
 
   return (
     <div>
-      <PageHeader title={label} description={t('models.providersHeading')} divider={false} actions={<ModelsTabs />} />
+      <PageHeader title={label} description={t('models.providersHeading')} divider={false} />
 
       <div className="space-y-6">
         <Link to="/models/chat" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">

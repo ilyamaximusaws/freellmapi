@@ -9,11 +9,11 @@ import { useI18n } from '@/i18n'
 export function ModelsTabs() {
   const { t } = useI18n()
   const tab = (isActive: boolean) =>
-    `inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg transition-colors ${
-      isActive ? 'bg-foreground text-background font-medium' : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+    `inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg transition-all duration-200 ${
+      isActive ? 'bg-primary text-primary-foreground font-medium shadow-sm shadow-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-muted'
     }`
   return (
-    <div className="inline-flex max-w-full gap-1 overflow-x-auto rounded-xl border p-1 [&>a]:shrink-0">
+    <div className="inline-flex max-w-full gap-1 overflow-x-auto rounded-xl border border-border/80 bg-muted/30 p-1 shadow-inner [&>a]:shrink-0">
       <NavLink to="/models/chat" className={({ isActive }) => tab(isActive)}>{t('models.chatModelsTab')}</NavLink>
       <NavLink to="/models/image" className={({ isActive }) => tab(isActive)}>{t('models.imageTab')}</NavLink>
       <NavLink to="/models/video" className={({ isActive }) => tab(isActive)}>{t('models.videoTab')}</NavLink>

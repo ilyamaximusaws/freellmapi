@@ -5,7 +5,6 @@ import { useI18n } from '@/i18n'
 import { apiFetch } from '@/lib/api'
 import { CopyButton } from '@/components/copy-button'
 import { PageHeader } from '@/components/page-header'
-import { ModelsTabs } from '@/components/models-tabs'
 import { apiBaseUrl, ApiUsageBlock } from '@/components/api-usage'
 
 interface ProviderEntry {
@@ -57,7 +56,7 @@ export default function EmbeddingDetailPage() {
 
   return (
     <div>
-      <PageHeader title={family || t('models.providersHeading')} description={t('models.providersHeading')} divider={false} actions={<ModelsTabs />} />
+      <PageHeader title={family || t('models.providersHeading')} description={t('models.providersHeading')} divider={false} />
 
       <div className="space-y-6">
         <Link to="/models/embeddings" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
