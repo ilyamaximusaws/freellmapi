@@ -499,22 +499,28 @@ modelsRouter.get('/', (_req: Request, res: Response) => {
   const models = activeProfileId == null ? db.prepare(`
     SELECT m.*, fc.priority, fc.enabled as fallback_enabled,
            mo.overrides_json IS NOT NULL AS has_overrides, mo.overrides_json,
-           ak.label AS key_label
+           ak.label AS key_label,
+           ts.source AS tombstone_source, ts.reason AS tombstone_reason
     FROM models m
     LEFT JOIN fallback_config fc ON fc.model_db_id = m.id
     LEFT JOIN model_overrides mo ON mo.platform = m.platform AND mo.model_id = m.model_id
     LEFT JOIN api_keys ak ON ak.id = m.key_id
+    LEFT JOIN catalog_model_tombstones ts
+      ON ts.kind = 'chat' AND ts.platform = m.platform AND ts.model_id = m.model_id
     ORDER BY COALESCE(fc.priority, m.intelligence_rank) ASC
   `).all() as any[] : db.prepare(`
     SELECT m.*, COALESCE(pm.priority, fc.priority) AS priority,
            COALESCE(pm.enabled, fc.enabled) AS fallback_enabled,
            mo.overrides_json IS NOT NULL AS has_overrides, mo.overrides_json,
-           ak.label AS key_label
+           ak.label AS key_label,
+           ts.source AS tombstone_source, ts.reason AS tombstone_reason
     FROM models m
     LEFT JOIN fallback_config fc ON fc.model_db_id = m.id
     LEFT JOIN profile_models pm ON pm.profile_id = ? AND pm.model_db_id = m.id
     LEFT JOIN model_overrides mo ON mo.platform = m.platform AND mo.model_id = m.model_id
     LEFT JOIN api_keys ak ON ak.id = m.key_id
+    LEFT JOIN catalog_model_tombstones ts
+      ON ts.kind = 'chat' AND ts.platform = m.platform AND ts.model_id = m.model_id
     ORDER BY COALESCE(pm.priority, fc.priority, m.intelligence_rank) ASC
   `).all(activeProfileId) as any[];
 
@@ -586,6 +592,8 @@ modelsRouter.get('/', (_req: Request, res: Response) => {
     disabledBy: m.disabled_by ?? null,
     supportsVision: m.supports_vision === 1,
     supportsTools: m.supports_tools === 1,
+    retiredUpstream: m.tombstone_source === 'upstream_eol',
+    retiredReason: m.tombstone_reason ?? null,
     priority: m.priority,
     // Catalog, active chain, and per-account scope are separate gates. Keep
     // them explicit; `fallbackEnabled` stays as the chain view for old clients,
