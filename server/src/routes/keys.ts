@@ -171,7 +171,10 @@ const addKeySchema = z.object({
 const updateKeySchema = z.object({
   enabled: z.boolean().optional(),
   label: z.string().optional(),
-  modelScope: z.array(z.string().trim().min(1).max(200)).max(100).nullable().optional(),
+  // A relay catalog can hold hundreds of models. Skipping one model on an
+// unscoped account has to materialize the rest of the pool, so the old 100-item
+// ceiling made that operation impossible for large relays.
+  modelScope: z.array(z.string().trim().min(1).max(200)).max(10_000).nullable().optional(),
   // #590: '' clears the per-key proxy; absent leaves it unchanged.
   proxyUrl: proxyUrlSchema.optional(),
   // Monthly budget caps (#1158): 0 clears the cap (unlimited).
@@ -2037,16 +2040,32 @@ function syncKeyBoundModelsToScope(
   const chainOn = db.prepare('UPDATE profile_models SET enabled = 1 WHERE model_db_id = ?');
   const globalOn = db.prepare('UPDATE fallback_config SET enabled = 1 WHERE model_db_id = ?');
 
+  const keyRow = db.prepare('SELECT platform, base_url FROM api_keys WHERE id = ?').get(keyId) as
+    { platform: string; base_url: string | null } | undefined;
+  // Two accounts on one relay share one catalog row (bound to whichever key
+  // discovered the model). A scope edit on ONE account must not take that row
+  // out of the chain while the sibling account still has the model in scope.
+  const siblings = keyRow
+    ? (db.prepare('SELECT id, model_scope_json, base_url FROM api_keys WHERE platform = ? AND enabled = 1 AND id != ?')
+        .all(keyRow.platform, keyId) as Array<{ id: number; model_scope_json: string | null; base_url: string | null }>)
+        .filter(sibling => keyRow.platform !== 'custom'
+          || endpointScopeForBaseUrl(sibling.base_url) === endpointScopeForBaseUrl(keyRow.base_url))
+        .map(sibling => ({ scope: parseModelScope(sibling.model_scope_json) }))
+    : [];
+  const siblingAllows = (modelId: string) => siblings.some(sibling =>
+    sibling.scope === null || sibling.scope.has(modelId));
+
   let disabled = 0;
   let restored = 0;
   for (const row of rows) {
     const inScope = allowed === null || allowed.has(row.model_id);
-    if (!inScope && row.enabled === 1) {
+    const stillServed = siblingAllows(row.model_id);
+    if (!inScope && !stillServed && row.enabled === 1) {
       disableModel.run(row.id);
       chainOff.run(row.id);
       globalOff.run(row.id);
       disabled++;
-    } else if (inScope && row.enabled === 0 && row.disabled_by === 'scope') {
+    } else if ((inScope || stillServed) && row.enabled === 0 && row.disabled_by === 'scope') {
       restoreModel.run(row.id);
       chainOn.run(row.id);
       globalOn.run(row.id);

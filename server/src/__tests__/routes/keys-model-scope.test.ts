@@ -103,7 +103,7 @@ describe('Keys API — model scope', () => {
 
   it('rejects malformed payloads', async () => {
     const id = insertKey();
-    for (const modelScope of ['not-an-array', [''], [42], [{ id: 'x' }], ['x'.repeat(201)], Array.from({ length: 101 }, (_, i) => `m${i}`)]) {
+    for (const modelScope of ['not-an-array', [''], [42], [{ id: 'x' }], ['x'.repeat(201)], Array.from({ length: 10_001 }, (_, i) => `m${i}`)]) {
       const patch = await request(app, 'PATCH', `/api/keys/${id}`, { modelScope });
       expect(patch.status, JSON.stringify(modelScope).slice(0, 60)).toBe(400);
     }
@@ -172,6 +172,26 @@ describe('Keys API — model scope', () => {
       expect(patch.status).toBe(200);
       expect(patch.body.scopeSync).toEqual({ disabled: 0, restored: 0 });
       expect(modelRow(manual)).toEqual({ enabled: 0, disabled_by: 'user' });
+    });
+
+    it('keeps a shared relay model enabled while a sibling key still serves it', async () => {
+      const insertCustomKey = async (scope: string[]) => {
+        const { encrypted, iv, authTag } = encrypt('sk-test');
+        const result = getDb().prepare(`
+          INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled, base_url, model_scope_json)
+          VALUES ('custom', 'sibling', ?, ?, ?, 'healthy', 1, 'https://relay.example/v1', ?)
+        `).run(encrypted, iv, authTag, JSON.stringify(scope));
+        return Number(result.lastInsertRowid);
+      };
+      const owner = await insertCustomKey(['keep', 'shared']);
+      const sibling = await insertCustomKey(['shared']);
+      const bound = bindModel(owner, 'shared', 1);
+
+      const patch = await request(app, 'PATCH', `/api/keys/${owner}`, { modelScope: ['keep'] });
+      expect(patch.status).toBe(200);
+      expect(patch.body.scopeSync).toEqual({ disabled: 0, restored: 0 });
+      expect(modelRow(bound)).toEqual({ enabled: 1, disabled_by: null });
+      expect(sibling).not.toBe(owner);
     });
 
     it('touches no model that is not bound to the key', async () => {
