@@ -7,6 +7,7 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import { initDb, getDb } from '../../db/index.js';
 import {
   selectProbeCandidates,
+  selectProviderProbeCandidates,
   probeModel,
   recordProbeResult,
   runModelProbePass,
@@ -66,6 +67,27 @@ const chatFail = (message: string) => vi.fn(async () => { throw new Error(messag
 const noJitter = () => 0;
 
 describe('candidate selection', () => {
+  it('selects one credential per model for a provider check', () => {
+    const db = getDb();
+    db.prepare(`INSERT INTO api_keys (id, platform, label, encrypted_key, iv, auth_tag, status, enabled)
+                VALUES (2, 'probe-test', '', '', '', '', 'healthy', 1)`).run();
+    addModel(1, 'm1');
+    addModel(2, 'm2');
+    const picked = selectProviderProbeCandidates(db, 'probe-test', null, 5);
+    expect(picked.map(c => [c.modelId, c.keyId])).toEqual([['m1', 1], ['m2', 1]]);
+    expect(selectProviderProbeCandidates(db, 'other-platform', null, 5)).toEqual([]);
+    expect(selectProviderProbeCandidates(db, 'probe-test', null, 1)).toHaveLength(1);
+  });
+
+  it('probes immediately when forced, ignoring first-sighting stagger', async () => {
+    const list = seedCandidates(1);
+    const pass = await runModelProbePass({
+      select: selectFrom(list), maxProbes: 1, force: true, now: 1_000_000, chat: chatOk(), jitter: noJitter,
+    });
+    expect(pass.outcomes).toHaveLength(1);
+    expect(pass.outcomes[0].outcome.status).toBe('working');
+  });
+
   it('probes the stalest evidence first, never-probed before stale', () => {
     const db = getDb();
     addModel(1, 'old');
@@ -134,6 +156,15 @@ describe('recording', () => {
     const row = db.prepare('SELECT * FROM model_probe_status').get() as any;
     expect(row.status).toBe('working');
     expect(row.last_error).toBe('fetch failed');
+  });
+
+  it('records the first inconclusive probe so the UI can show it', () => {
+    const db = getDb();
+    recordProbeResult(db, candidate(), { status: 'error', error: 'timeout' });
+    const row = db.prepare('SELECT * FROM model_probe_status').get() as any;
+    expect(row.status).toBe('error');
+    expect(row.last_error).toBe('timeout');
+    expect(row.last_probed_at).toBeTruthy();
   });
 });
 

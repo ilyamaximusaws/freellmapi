@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import { getDb, isKeyStoreDecryptable } from '../db/index.js';
 import { checkKeyHealth, checkAllKeys, pollKeyQuota, supportsQuotaPolling } from '../services/health.js';
 import { getDegradationStatus } from '../services/degradation.js';
-import { runModelProbePass } from '../services/model-probe.js';
+import { runModelProbePass, selectProviderProbeCandidates } from '../services/model-probe.js';
 import { hasProvider, resolveProvider } from '../providers/index.js';
 import { getQuotaStateForKeys } from '../services/provider-quota.js';
 import type { Platform } from '@freellmapi/shared/types.js';
@@ -117,12 +117,45 @@ healthRouter.post('/quota/:keyId', async (req: Request, res: Response) => {
   res.json({ keyId, recorded, quotaStates: state });
 });
 
-// Run one proactive model-probe pass now (#1438 PR 1). The scheduled pass runs
-// every 30 minutes; this is the manual override — an operator wanting fresh
-// labels immediately instead of waiting for the next pass. Same shape as
-// POST /check-all: the operator pressed the button, so run a full pass.
-healthRouter.post('/probe-models', async (_req: Request, res: Response) => {
-  const result = await runModelProbePass();
+// Last known availability labels for the operator's "check this provider"
+// panel. Rows are per model+key pair; Ember shows one row per model.
+healthRouter.get('/probe-status', (req: Request, res: Response) => {
+  const platform = typeof req.query.platform === 'string' && req.query.platform.trim()
+    ? req.query.platform.trim() : null;
+  const endpointScope = typeof req.query.endpointScope === 'string' ? req.query.endpointScope : null;
+  const rows = getDb().prepare(`
+    SELECT s.platform, s.model_id AS modelId, s.endpoint_scope AS endpointScope, s.key_id AS keyId,
+           s.status, s.last_probed_at AS lastProbedAt, s.last_error AS lastError, s.latency_ms AS latencyMs,
+           m.display_name AS displayName, k.label AS keyLabel
+      FROM model_probe_status s
+      LEFT JOIN models m ON m.platform = s.platform AND m.model_id = s.model_id AND m.endpoint_scope = s.endpoint_scope
+      LEFT JOIN api_keys k ON k.id = s.key_id
+     WHERE (? IS NULL OR s.platform = ?) AND (? IS NULL OR s.endpoint_scope = ?)
+     ORDER BY (s.status = 'unavailable') DESC, s.last_probed_at DESC, s.model_id ASC
+  `).all(platform, platform, endpointScope, endpointScope) as Array<{
+    platform: string; modelId: string; endpointScope: string | null; keyId: number;
+    status: string; lastProbedAt: string | null; lastError: string | null;
+    latencyMs: number | null; displayName: string | null; keyLabel: string | null;
+  }>;
+  res.json({ rows });
+});
+
+// Run a model-probe pass now. Without a platform this is the legacy full pass;
+// with one it checks that provider's models immediately (no stagger, no freshness
+// skip), one credential per model, capped at `limit` real chat requests.
+healthRouter.post('/probe-models', async (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as { platform?: unknown; endpointScope?: unknown; limit?: unknown };
+  const platform = typeof body.platform === 'string' && body.platform.trim() ? body.platform.trim() : null;
+  const endpointScope = typeof body.endpointScope === 'string' ? body.endpointScope : null;
+  const parsedLimit = Number(body.limit);
+  const limit = Number.isInteger(parsedLimit) ? Math.max(1, Math.min(50, parsedLimit)) : 10;
+  const result = platform
+    ? await runModelProbePass({
+        force: true,
+        maxProbes: limit,
+        select: () => selectProviderProbeCandidates(getDb(), platform, endpointScope, limit),
+      })
+    : await runModelProbePass();
   res.json({
     probed: result.probed.map(c => ({
       platform: c.platform,

@@ -37,6 +37,7 @@ import { withKeyProxy } from '../lib/proxy.js';
 import { sanitizeProviderErrorMessage } from '../lib/error-redaction.js';
 import { providerLog } from '../lib/server-logs.js';
 import { inferQuotaPoolKey } from './provider-quota.js';
+import { endpointScopeForBaseUrl } from '../lib/endpoint-scope.js';
 
 // One pass every 30 minutes. Probes are quota-costing real requests; the point
 // is freshness on the scale of "an operator glances at the dashboard", not
@@ -136,6 +137,47 @@ export function selectProbeCandidates(db: Db, limit: number, now = Date.now()): 
   return out;
 }
 
+/**
+ * Candidates for an operator's "check this provider's models now" action.
+ * Unlike the scheduled selector this ignores freshness/backoff — the operator
+ * asked for reality right now — and probes one credential per model. Custom
+ * relays are matched by endpoint scope so sibling relays never cross-contaminate.
+ */
+export function selectProviderProbeCandidates(
+  db: Db,
+  platform: string,
+  endpointScope: string | null,
+  limit: number,
+): ProbeCandidate[] {
+  const rows = db.prepare(`
+    SELECT m.id AS modelDbId, m.platform, m.model_id AS modelId, m.endpoint_scope AS endpointScope,
+           k.id AS keyId, k.base_url AS baseUrl
+      FROM models m
+      JOIN api_keys k ON k.platform = m.platform AND k.enabled = 1 AND k.status IN ('healthy', 'unknown')
+     WHERE m.enabled = 1 AND m.platform = ?
+       AND (? IS NULL OR m.endpoint_scope = ?)
+     ORDER BY m.id, k.id
+  `).all(platform, endpointScope, endpointScope) as Array<ProbeCandidate & { baseUrl: string | null }>;
+
+  const seen = new Set<string>();
+  const out: ProbeCandidate[] = [];
+  for (const row of rows) {
+    if (row.platform === 'custom' && endpointScopeForBaseUrl(row.baseUrl) !== row.endpointScope) continue;
+    const identity = `${row.platform}:${row.modelId}:${row.endpointScope}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    out.push({
+      keyId: row.keyId,
+      platform: row.platform,
+      modelId: row.modelId,
+      modelDbId: row.modelDbId,
+      endpointScope: row.endpointScope,
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 // ── The probe itself ─────────────────────────────────────────────────────────
 
 export interface ModelProbeRequestDeps {
@@ -199,11 +241,18 @@ export async function probeModel(candidate: ProbeCandidate, deps: ModelProbeRequ
 export function recordProbeResult(db: Db, candidate: ProbeCandidate, outcome: ProbeOutcome, probedAt = new Date()): void {
   if (outcome.status === 'error') {
     // Inconclusive: do not overwrite the last real verdict, but keep the
-    // diagnostic and refresh the timestamp so pacing/backoff can see it.
-    db.prepare(`
+    // diagnostic and refresh the timestamp so pacing/backoff can see it. If no
+    // verdict exists yet, record the inconclusive itself so the UI can show it.
+    const updated = db.prepare(`
       UPDATE model_probe_status SET last_error = ?, last_probed_at = datetime('now')
        WHERE platform = ? AND model_id = ? AND endpoint_scope = ? AND key_id = ?
     `).run(outcome.error ?? 'probe error', candidate.platform, candidate.modelId, candidate.endpointScope, candidate.keyId);
+    if (!updated.changes) {
+      db.prepare(`
+        INSERT INTO model_probe_status (platform, model_id, endpoint_scope, key_id, status, last_probed_at, last_error, latency_ms)
+        VALUES (?, ?, ?, ?, 'error', datetime('now'), ?, ?)
+      `).run(candidate.platform, candidate.modelId, candidate.endpointScope, candidate.keyId, outcome.error ?? 'probe error', outcome.latencyMs ?? null);
+    }
     return;
   }
   db.prepare(`
@@ -250,6 +299,8 @@ export interface ProbePassOptions extends ModelProbeRequestDeps {
   jitter?: () => number; // [0, 1), defaults to Math.random
   maxProbes?: number;
   select?: (limit: number, now: number) => ProbeCandidate[];
+  /** Operator-requested pass: ignore first-sighting stagger and backoff. */
+  force?: boolean;
 }
 
 /** One probe pass: probe up to maxProbes stale candidates, record the outcomes.
@@ -267,13 +318,17 @@ export async function runModelProbePass(opts: ProbePassOptions = {}): Promise<Pr
   for (const candidate of candidates) {
     if (probed.length >= maxProbes) break;
     const key = stateKey(candidate);
-    const state = probeState.get(key);
-    if (!state) {
-      // First sighting after boot: schedule, don't probe (restart stagger).
-      probeState.set(key, { failures: 0, nextProbeAtMs: now + Math.floor(jitter() * FIRST_PROBE_STAGGER_MS) });
-      continue;
+    const existing = probeState.get(key);
+    if (!opts.force) {
+      if (!existing) {
+        // First sighting after boot: schedule, don't probe (restart stagger).
+        probeState.set(key, { failures: 0, nextProbeAtMs: now + Math.floor(jitter() * FIRST_PROBE_STAGGER_MS) });
+        continue;
+      }
+      if (now < existing.nextProbeAtMs) continue;
     }
-    if (now < state.nextProbeAtMs) continue;
+    const state = existing ?? { failures: 0, nextProbeAtMs: now };
+    probeState.set(key, state);
 
     probed.push(candidate);
     const outcome = await probeModel(candidate, opts);
