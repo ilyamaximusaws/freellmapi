@@ -68,11 +68,12 @@ const chatFail = (message: string) => vi.fn(async () => { throw new Error(messag
 const noJitter = () => 0;
 
 describe('candidate selection', () => {
-  it('selects candidates by explicit model DB ids', () => {
+  it('selects every enabled key for an explicitly checked model', () => {
     addModel(1, 'a');
-    addModel(2, 'b');
-    const picked = selectModelProbeCandidatesByIds(getDb(), [2], 0);
-    expect(picked.map(candidate => candidate.modelDbId)).toEqual([2]);
+    getDb().prepare(`INSERT INTO api_keys (id, platform, label, encrypted_key, iv, auth_tag, status, enabled)
+                   VALUES (2, 'probe-test', '', '', '', '', 'healthy', 1)`).run();
+    const picked = selectModelProbeCandidatesByIds(getDb(), [1], 0);
+    expect(picked.map(candidate => candidate.keyId)).toEqual([1, 2]);
   });
 
   it('selects every model when the limit is zero', () => {

@@ -188,8 +188,7 @@ export function selectModelProbeCandidatesByIds(db: Db, modelDbIds: number[], li
     SELECT m.id AS modelDbId, m.platform, m.model_id AS modelId, m.endpoint_scope AS endpointScope,
            k.id AS keyId, k.base_url AS baseUrl
       FROM models m
-      JOIN api_keys k ON k.enabled = 1
-        AND (k.id = m.key_id OR (m.key_id IS NULL AND k.platform = m.platform))
+      JOIN api_keys k ON k.platform = m.platform AND k.enabled = 1
      WHERE m.id IN (${placeholders})
      ORDER BY m.id, k.id
   `).all(...modelDbIds) as Array<ProbeCandidate & { baseUrl: string | null }>;
@@ -197,7 +196,9 @@ export function selectModelProbeCandidatesByIds(db: Db, modelDbIds: number[], li
   const out: ProbeCandidate[] = [];
   for (const row of rows) {
     if (row.platform === 'custom' && endpointScopeForBaseUrl(row.baseUrl) !== endpointScopeForBaseUrl(row.endpointScope)) continue;
-    const identity = `${row.platform}:${row.modelId}:${row.endpointScope}`;
+    // Every credential on a relay serves that endpoint's whole model list, so
+    // keep one candidate per key — the UI shows availability per account.
+    const identity = `${row.platform}:${row.modelId}:${row.endpointScope}:${row.keyId}`;
     if (seen.has(identity)) continue;
     seen.add(identity);
     out.push({
