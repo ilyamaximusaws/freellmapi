@@ -39,6 +39,9 @@ export interface AttemptTraceRecord {
   // A snapshot, not a live join: renaming the key later must not rewrite
   // history. Deliberately NOT the internal key id or the key itself.
   keyLabel: string | null;
+  // Endpoint snapshot (custom relay base_url, '' for catalog providers) so a
+  // deleted/renamed key cannot turn the attempt label back into bare `custom`.
+  endpointScope?: string;
   outcome: AttemptOutcome;
   // Milliseconds from the ladder's start to this attempt's dispatch.
   startOffsetMs: number;

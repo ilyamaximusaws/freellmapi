@@ -1592,6 +1592,7 @@ async function runFallbackLoopAttempts(hooks: FallbackHooks, trace: RequestTrace
         modelId: route.modelId,
         keyOrdinal: keyOrdinal(route),
         keyLabel: route.keyLabel ?? null,
+        endpointScope: route.endpointScope ?? '',
         outcome,
         startOffsetMs: attemptStartedAt - startedAt,
         durationMs: Date.now() - attemptStartedAt,

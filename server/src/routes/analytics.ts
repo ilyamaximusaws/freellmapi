@@ -789,7 +789,7 @@ analyticsRouter.get('/requests', (req: Request, res: Response) => {
            r.client_ip, r.client_user_agent, r.client_agent,
            strftime('%Y-%m-%dT%H:%M:%SZ', r.created_at) as created_at_iso,
            (SELECT COUNT(*) FROM request_attempts a WHERE a.request_id = r.id) as attempt_count,
-           k.label as key_label
+           k.label as key_label, r.endpoint_scope as endpoint_scope
     FROM requests r
     LEFT JOIN api_keys k ON k.id = r.key_id
     WHERE r.created_at >= ?${filterSql}
@@ -819,6 +819,9 @@ analyticsRouter.get('/requests', (req: Request, res: Response) => {
       // provider in the recent-calls list. Null when the key was deleted or
       // never labelled.
       keyLabel: r.key_label ?? null,
+      // Stored endpoint snapshot — custom relays' real host, never bare
+      // 'custom'. Survives key deletion/renaming.
+      endpointScope: r.endpoint_scope || null,
       // Failover-ladder length for this row. Attempts hang off the TERMINAL
       // row of a proxied request; mid-ladder failure rows report 0.
       attemptCount: r.attempt_count,
@@ -844,7 +847,7 @@ analyticsRouter.get('/requests/:id', (req: Request, res: Response) => {
   const r = db.prepare(`
     SELECT id, platform, model_id, requested_model, served_model, request_type, status,
            input_tokens, output_tokens, latency_ms, ttfb_ms, error,
-           client_ip, client_user_agent, client_agent,
+           client_ip, client_user_agent, client_agent, endpoint_scope,
            strftime('%Y-%m-%dT%H:%M:%SZ', created_at) as created_at_iso
     FROM requests
     WHERE id = ?
@@ -855,7 +858,7 @@ analyticsRouter.get('/requests/:id', (req: Request, res: Response) => {
   }
 
   const attempts = db.prepare(`
-    SELECT ordinal, platform, model_id, key_ordinal, key_label, outcome, start_offset_ms, duration_ms, error_summary
+    SELECT ordinal, platform, model_id, key_ordinal, key_label, endpoint_scope, outcome, start_offset_ms, duration_ms, error_summary
     FROM request_attempts
     WHERE request_id = ?
     ORDER BY ordinal ASC
@@ -880,12 +883,14 @@ analyticsRouter.get('/requests/:id', (req: Request, res: Response) => {
     clientUserAgent: r.client_user_agent,
     clientAgent: r.client_agent,
     createdAt: r.created_at_iso,
+    endpointScope: r.endpoint_scope || null,
     attempts: attempts.map(a => ({
       ordinal: a.ordinal,
       platform: a.platform,
       modelId: a.model_id,
       keyOrdinal: a.key_ordinal,
       keyLabel: a.key_label ?? null,
+      endpointScope: a.endpoint_scope || null,
       outcome: a.outcome,
       startOffsetMs: a.start_offset_ms,
       durationMs: a.duration_ms,

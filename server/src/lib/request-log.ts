@@ -36,6 +36,13 @@ function setSettingIfMissing(db: LogTx, key: string, value: string): void {
 // Returns NULL when the request is unattributable — a custom request whose
 // key never reached routing, or whose key no longer resolves to a matching
 // model row. An unattributable request must not land on the wrong relay.
+/** Snapshot the relay host at log time so deleted keys cannot erase it. */
+function resolveEndpointScope(db: LogTx, platform: string, keyId: number | null): string {
+  if (platform !== 'custom' || keyId == null) return '';
+  const key = db.prepare('SELECT base_url FROM api_keys WHERE id = ?').get(keyId) as { base_url: string | null } | undefined;
+  return (key?.base_url ?? '').trim().replace(/\/+$/, '');
+}
+
 function resolveModelDbId(
   db: LogTx,
   platform: string,
@@ -123,9 +130,9 @@ export function logRequest(
     const client = getClientContext();
     const tx = db.transaction(() => {
       const insert = db.prepare(`
-        INSERT INTO requests (platform, model_id, key_id, status, input_tokens, output_tokens, latency_ms, error, ttfb_ms, requested_model, served_model, client_ip, client_user_agent, client_agent, client_id, caller, model_db_id, failure_attribution)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(platform, modelId, keyId, status, inputTokens, outputTokens, latencyMs, error, ttfbMs, requestedModel, servedModel, client.ip, client.userAgent, client.agent, client.clientId ?? null, caller, resolveModelDbId(db, platform, modelId, keyId), failureAttribution);
+        INSERT INTO requests (platform, model_id, key_id, status, input_tokens, output_tokens, latency_ms, error, ttfb_ms, requested_model, served_model, client_ip, client_user_agent, client_agent, client_id, caller, model_db_id, failure_attribution, endpoint_scope)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(platform, modelId, keyId, status, inputTokens, outputTokens, latencyMs, error, ttfbMs, requestedModel, servedModel, client.ip, client.userAgent, client.agent, client.clientId ?? null, caller, resolveModelDbId(db, platform, modelId, keyId), failureAttribution, resolveEndpointScope(db, platform, keyId));
 
       // Report the row id back to the fallback loop's attempt trace (if one is
       // active): the LAST id noted during a loop run is the terminal row the
@@ -184,12 +191,12 @@ export function persistRequestAttempts(trace: RequestTrace): void {
   try {
     const db = getDb();
     const insert = db.prepare(`
-      INSERT INTO request_attempts (request_id, ordinal, platform, model_id, key_ordinal, key_label, outcome, start_offset_ms, duration_ms, error_summary)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO request_attempts (request_id, ordinal, platform, model_id, key_ordinal, key_label, outcome, start_offset_ms, duration_ms, error_summary, endpoint_scope)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const tx = db.transaction(() => {
       for (const r of trace.records) {
-        insert.run(trace.lastRequestRowId, r.ordinal, r.platform, r.modelId, r.keyOrdinal, r.keyLabel, r.outcome, r.startOffsetMs, r.durationMs, r.errorSummary);
+        insert.run(trace.lastRequestRowId, r.ordinal, r.platform, r.modelId, r.keyOrdinal, r.keyLabel, r.outcome, r.startOffsetMs, r.durationMs, r.errorSummary, r.endpointScope ?? '');
       }
     });
     tx();

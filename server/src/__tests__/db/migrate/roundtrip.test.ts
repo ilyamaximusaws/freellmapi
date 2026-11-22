@@ -64,6 +64,7 @@ const KEY_METADATA_NOTIFICATIONS_FILENAME = '20261114_000007_key_metadata_notifi
 const AUDIT_LOG_FILENAME = '20261114_000008_audit_log.ts';
 const MODEL_DISABLED_BY_FILENAME = '20261115_000009_model_disabled_by.ts';
 const SITE_NOTIFICATIONS_FILENAME = '20261122_000001_site_notifications.ts';
+const REQUEST_ENDPOINT_SCOPE_FILENAME = '20261122_000002_request_endpoint_scope.ts';
 
 interface SchemaRow {
   type: string;
@@ -175,6 +176,7 @@ describe('migration round trip', () => {
         AUDIT_LOG_FILENAME,
         MODEL_DISABLED_BY_FILENAME,
         SITE_NOTIFICATIONS_FILENAME,
+        REQUEST_ENDPOINT_SCOPE_FILENAME,
       ]);
     } finally {
       db.close();
