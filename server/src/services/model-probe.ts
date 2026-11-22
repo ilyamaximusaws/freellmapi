@@ -164,7 +164,7 @@ export function selectProviderProbeCandidates(
   const seen = new Set<string>();
   const out: ProbeCandidate[] = [];
   for (const row of rows) {
-    if (row.platform === 'custom' && endpointScopeForBaseUrl(row.baseUrl) !== row.endpointScope) continue;
+    if (row.platform === 'custom' && endpointScopeForBaseUrl(row.baseUrl) !== endpointScopeForBaseUrl(row.endpointScope)) continue;
     const identity = `${row.platform}:${row.modelId}:${row.endpointScope}`;
     if (seen.has(identity)) continue;
     seen.add(identity);
