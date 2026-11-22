@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import { getDb, isKeyStoreDecryptable } from '../db/index.js';
 import { checkKeyHealth, checkAllKeys, pollKeyQuota, supportsQuotaPolling } from '../services/health.js';
 import { getDegradationStatus } from '../services/degradation.js';
-import { runModelProbePass, selectProviderProbeCandidates } from '../services/model-probe.js';
+import { runModelProbePass, selectModelProbeCandidatesByIds, selectProviderProbeCandidates } from '../services/model-probe.js';
 import { hasProvider, resolveProvider } from '../providers/index.js';
 import { getQuotaStateForKeys } from '../services/provider-quota.js';
 import type { Platform } from '@freellmapi/shared/types.js';
@@ -137,7 +137,7 @@ healthRouter.get('/probe-status', (req: Request, res: Response) => {
     ? req.query.platform.trim() : null;
   const endpointScope = typeof req.query.endpointScope === 'string' ? req.query.endpointScope : null;
   const rows = getDb().prepare(`
-    SELECT s.platform, s.model_id AS modelId, s.endpoint_scope AS endpointScope, s.key_id AS keyId,
+    SELECT m.id AS modelDbId, s.platform, s.model_id AS modelId, s.endpoint_scope AS endpointScope, s.key_id AS keyId,
            s.status, s.last_probed_at AS lastProbedAt, s.last_error AS lastError, s.latency_ms AS latencyMs,
            m.display_name AS displayName, k.label AS keyLabel
       FROM model_probe_status s
@@ -158,7 +158,7 @@ healthRouter.get('/probe-status', (req: Request, res: Response) => {
 // Without a platform this remains the legacy synchronous full pass.
 healthRouter.post('/probe-models', async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as {
-    platform?: unknown; endpointScope?: unknown; limit?: unknown; timeoutMs?: unknown; all?: unknown
+    platform?: unknown; endpointScope?: unknown; limit?: unknown; timeoutMs?: unknown; all?: unknown; modelDbIds?: unknown
   };
   const platform = typeof body.platform === 'string' && body.platform.trim() ? body.platform.trim() : null;
   const endpointScope = typeof body.endpointScope === 'string' ? body.endpointScope : null;
@@ -170,13 +170,19 @@ healthRouter.post('/probe-models', async (req: Request, res: Response) => {
     ? Math.max(3_000, Math.min(60_000, parsedTimeout))
     : 30_000;
 
-  if (!platform) {
+  const modelDbIds = Array.isArray(body.modelDbIds)
+    ? body.modelDbIds.filter((value): value is number => Number.isInteger(value) && value > 0)
+    : [];
+  const idCheck = modelDbIds.length > 0;
+
+  if (!platform && !idCheck) {
     await runModelProbePass();
     res.json({ started: true, total: 0, timeoutMs });
     return;
   }
 
-  const key = checkKey(platform, endpointScope);
+  const checkPlatform = idCheck ? '__models__' : platform!;
+  const key = idCheck ? `ids:${modelDbIds.join(',')}` : checkKey(checkPlatform, endpointScope);
   const existing = activeProviderChecks.get(key);
   if (existing) {
     res.status(202).json({ started: false, alreadyRunning: true, ...existing });
@@ -185,16 +191,18 @@ healthRouter.post('/probe-models', async (req: Request, res: Response) => {
 
   // Include disabled models: availability is useful precisely when a model is
   // off in Ember, and the operator decides whether to turn it back on.
-  const candidates = selectProviderProbeCandidates(getDb(), platform, endpointScope, limit, true);
+  const candidates = idCheck
+    ? selectModelProbeCandidatesByIds(getDb(), modelDbIds, limit)
+    : selectProviderProbeCandidates(getDb(), checkPlatform, endpointScope, limit, true);
   const check: ProviderProbeCheck = {
-    platform, endpointScope, total: candidates.length, done: 0,
-    timeoutMs, startedAt: new Date().toISOString(),
+    platform: checkPlatform, endpointScope: idCheck ? null : endpointScope,
+    total: candidates.length, done: 0, timeoutMs, startedAt: new Date().toISOString(),
   };
   activeProviderChecks.set(key, check);
 
   void runModelProbePass({
     force: true,
-    maxProbes: checkAll ? candidates.length : limit,
+    maxProbes: checkAll || idCheck ? candidates.length : limit,
     concurrency: 4,
     timeoutMs,
     select: () => candidates,

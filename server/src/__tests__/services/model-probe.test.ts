@@ -8,6 +8,7 @@ import { initDb, getDb } from '../../db/index.js';
 import {
   selectProbeCandidates,
   selectProviderProbeCandidates,
+  selectModelProbeCandidatesByIds,
   probeModel,
   recordProbeResult,
   runModelProbePass,
@@ -67,6 +68,13 @@ const chatFail = (message: string) => vi.fn(async () => { throw new Error(messag
 const noJitter = () => 0;
 
 describe('candidate selection', () => {
+  it('selects candidates by explicit model DB ids', () => {
+    addModel(1, 'a');
+    addModel(2, 'b');
+    const picked = selectModelProbeCandidatesByIds(getDb(), [2], 0);
+    expect(picked.map(candidate => candidate.modelDbId)).toEqual([2]);
+  });
+
   it('selects every model when the limit is zero', () => {
     for (const id of [1, 2, 3]) addModel(id, `m${id}`);
     expect(selectProviderProbeCandidates(getDb(), 'probe-test', null, 0)).toHaveLength(3);

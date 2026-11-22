@@ -180,6 +180,35 @@ export function selectProviderProbeCandidates(
   return out;
 }
 
+/** Candidates for an explicit set of model DB ids (routing chain checks). */
+export function selectModelProbeCandidatesByIds(db: Db, modelDbIds: number[], limit: number): ProbeCandidate[] {
+  if (modelDbIds.length === 0) return [];
+  const placeholders = modelDbIds.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT m.id AS modelDbId, m.platform, m.model_id AS modelId, m.endpoint_scope AS endpointScope,
+           k.id AS keyId, k.base_url AS baseUrl
+      FROM models m
+      JOIN api_keys k ON k.enabled = 1
+        AND (k.id = m.key_id OR (m.key_id IS NULL AND k.platform = m.platform))
+     WHERE m.id IN (${placeholders})
+     ORDER BY m.id, k.id
+  `).all(...modelDbIds) as Array<ProbeCandidate & { baseUrl: string | null }>;
+  const seen = new Set<string>();
+  const out: ProbeCandidate[] = [];
+  for (const row of rows) {
+    if (row.platform === 'custom' && endpointScopeForBaseUrl(row.baseUrl) !== endpointScopeForBaseUrl(row.endpointScope)) continue;
+    const identity = `${row.platform}:${row.modelId}:${row.endpointScope}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    out.push({
+      keyId: row.keyId, platform: row.platform, modelId: row.modelId,
+      modelDbId: row.modelDbId, endpointScope: row.endpointScope,
+    });
+    if (limit > 0 && out.length >= limit) break;
+  }
+  return out;
+}
+
 // ── The probe itself ─────────────────────────────────────────────────────────
 
 export interface ModelProbeRequestDeps {
