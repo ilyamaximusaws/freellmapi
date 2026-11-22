@@ -619,4 +619,40 @@ describe('Model management API', () => {
     expect(missing.status).toBe(400);
     expect(JSON.stringify(missing.body)).toContain('no-such-group');
   });
+
+  it('reports models of a provider with no credential as not configured', async () => {
+    const db = getDb();
+    const platform = 'no-key-platform';
+    const inserted = db.prepare(INSERT_MODEL_SQL)
+      .run(platform, 'no-key-model', 'No Key Model', 9001, 9001, 'Small');
+    const modelDbId = Number(inserted.lastInsertRowid);
+    db.prepare(INSERT_FALLBACK_SQL).run(modelDbId, 9001);
+
+    const keyId = (async () => {
+      const listed = await request(app, 'GET', '/api/models');
+      // The published catalog carries rows for platforms nobody connected.
+      // Presenting them made dead providers look like part of the pool.
+      expect(listed.body.find((m: any) => m.id === modelDbId).configured).toBe(false);
+
+      const chain = await request(app, 'GET', '/api/fallback');
+      for (const row of (chain.body as any[]).filter(r => r.platform === platform)) {
+        expect(row.configured).toBe(false);
+      }
+
+      // A credential that is currently switched off still means the provider is
+      // part of this install's configuration; only its absence hides rows.
+      const added = db.prepare(`
+        INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled, base_url)
+        VALUES (?, 'paused account', 'aa', 'bb', 'cc', 'unknown', 0, NULL)
+      `).run(platform);
+
+      const after = await request(app, 'GET', '/api/models');
+      expect(after.body.find((m: any) => m.id === modelDbId).configured).toBe(true);
+      return Number(added.lastInsertRowid);
+    })();
+
+    db.prepare('DELETE FROM api_keys WHERE id = ?').run(await keyId);
+    db.prepare('DELETE FROM fallback_config WHERE model_db_id = ?').run(modelDbId);
+    db.prepare('DELETE FROM models WHERE id = ?').run(modelDbId);
+  });
 });

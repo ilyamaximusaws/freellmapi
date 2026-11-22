@@ -14,7 +14,7 @@ import { getModelGroups } from '../services/model-groups.js';
 import { getPenaltyInspector, clearRouterPressure } from '../services/penalty-inspector.js';
 import { getCooldownCeilingMs, setCooldownCeilingMs, MIN_COOLDOWN_CEILING_MS, MAX_COOLDOWN_CEILING_MS } from '../services/ratelimit.js';
 import { getActiveProfileId } from '../services/profile-models.js';
-import { qualifiedModelMemberId } from '../lib/endpoint-scope.js';
+import { qualifiedModelMemberId, endpointScopeForBaseUrl } from '../lib/endpoint-scope.js';
 import { overriddenFieldNames } from '../services/model-state.js';
 import { parseModelScope, scopeAllows } from '../lib/model-scope.js';
 import { getQuotaOutlook } from '../services/quota-outlook.js';
@@ -262,6 +262,24 @@ fallbackRouter.get('/', (req: Request, res: Response) => {
   `).all() as { platform: string; count: number }[];
   const keyCountMap = new Map(keyCounts.map(k => [k.platform, k.count]));
 
+  // Which providers this install actually has credentials for. The chain table
+  // still holds catalog rows for platforms with no key (Groq showed up on
+  // Routing that way); those rows cannot route and must not be presented as
+  // part of the operator's chain.
+  const credentialRows = db.prepare('SELECT platform, base_url FROM api_keys').all() as
+    Array<{ platform: string; base_url: string | null }>;
+  const configuredPlatforms = new Set(credentialRows.map(row => row.platform));
+  const configuredEndpoints = new Set(credentialRows
+    .filter(row => row.platform === 'custom')
+    .map(row => endpointScopeForBaseUrl(row.base_url)));
+  const isConfigured = (r: { platform: string; endpoint_scope?: string | null; key_id?: number | null }): boolean => {
+    if (r.platform !== 'custom') return configuredPlatforms.has(r.platform);
+    const endpoint = r.endpoint_scope
+      ? endpointScopeForBaseUrl(r.endpoint_scope)
+      : (r.key_id == null ? '' : '');
+    return endpoint ? configuredEndpoints.has(endpoint) : false;
+  };
+
   // Get current dynamic penalties
   const penalties = getAllPenalties();
   const penaltyMap = new Map(penalties.map(p => [p.modelDbId, p]));
@@ -335,6 +353,10 @@ fallbackRouter.get('/', (req: Request, res: Response) => {
       retiredUpstream: r.tombstone_source === 'upstream_eol',
       retiredReason: r.tombstone_source === 'upstream_eol' ? (r.tombstone_reason ?? null) : null,
       keyCount: keyCountMap.get(r.platform) ?? 0,
+      // False when no credential exists for this row's provider. The chain is
+      // still stored (removing a key must not silently rewrite the operator's
+      // order), but the UI hides these rows instead of showing phantom models.
+      configured: isConfigured(r),
     };
   }));
 });

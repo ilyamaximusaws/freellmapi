@@ -543,6 +543,14 @@ modelsRouter.get('/', (_req: Request, res: Response) => {
       FROM api_keys
   `).all() as Array<{ id: number; platform: string; base_url: string | null; model_scope_json: string | null; enabled: number }>;
   const ownerEndpoint = new Map(allKeys.map(key => [key.id, endpointScopeForBaseUrl(key.base_url)]));
+  // A provider only "exists" for this install when at least one credential is
+  // configured for it — enabled or not. The published catalog carries rows for
+  // ~60 platforms nobody here has a key for (groq was the visible one); showing
+  // them everywhere made dead providers look connected.
+  const configuredPlatforms = new Set(allKeys.map(key => key.platform));
+  const configuredEndpoints = new Set(
+    allKeys.filter(key => key.platform === 'custom').map(key => endpointScopeForBaseUrl(key.base_url)),
+  );
   const keysByPlatform = new Map<string, Array<{ id: number; endpoint: string; scope: Set<string> | null }>>();
   for (const key of allKeys) {
     if (key.enabled !== 1) continue;
@@ -555,15 +563,21 @@ modelsRouter.get('/', (_req: Request, res: Response) => {
     keysByPlatform.set(key.platform, list);
   }
 
+  const modelEndpointOf = (m: any): string => (m.endpoint_scope
+    ? endpointScopeForBaseUrl(m.endpoint_scope)
+    : (m.key_id == null ? '' : ownerEndpoint.get(m.key_id) ?? ''));
+
+  const isConfigured = (m: any): boolean => (m.platform === 'custom'
+    ? configuredEndpoints.has(modelEndpointOf(m))
+    : configuredPlatforms.has(m.platform));
+
   const servingKeyCount = (m: any): number => {
     const keys = keysByPlatform.get(m.platform) ?? [];
     if (keys.length === 0) return 0;
     if (m.platform !== 'custom') {
       return keys.filter(key => scopeAllows(key.scope, m.model_id)).length;
     }
-    const modelEndpoint = m.endpoint_scope
-      ? endpointScopeForBaseUrl(m.endpoint_scope)
-      : (m.key_id == null ? '' : ownerEndpoint.get(m.key_id) ?? '');
+    const modelEndpoint = modelEndpointOf(m);
     if (!modelEndpoint) return 0;
     return keys.filter(key => key.endpoint === modelEndpoint
       && scopeAllows(key.scope, m.model_id)).length;
@@ -602,6 +616,10 @@ modelsRouter.get('/', (_req: Request, res: Response) => {
     chainEnabled: m.enabled === 1 && m.fallback_enabled === 1,
     fallbackEnabled: m.enabled === 1 && m.fallback_enabled === 1,
     servingKeyCount: servingCount,
+    // False when this install has no credential for the model's provider at all.
+    // Catalog rows for providers nobody connected must not be presented as part
+    // of the operator's pool (Models page and Routing both filter on this).
+    configured: isConfigured(m),
     // Real provenance from models.source ('catalog' | 'user'). The dashboard's
     // existing vocabulary for user-added rows is 'custom', so map 1:1 here —
     // this now also flags user models on native platforms (declarative
