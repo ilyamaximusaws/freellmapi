@@ -39,6 +39,10 @@ describe('Keys API — model scope', () => {
   });
 
   beforeEach(() => {
+    getDb().prepare('DELETE FROM model_probe_status').run();
+    getDb().prepare('DELETE FROM fallback_config').run();
+    getDb().prepare('DELETE FROM profile_models').run();
+    getDb().prepare('DELETE FROM models').run();
     getDb().prepare('DELETE FROM api_keys').run();
   });
 
@@ -123,11 +127,12 @@ describe('Keys API — model scope', () => {
   describe('scope drives the models bound to the key', () => {
     function bindModel(keyId: number, modelId: string, priority: number, opts: { enabled?: number; disabledBy?: string | null } = {}) {
       const db = getDb();
+      const platform = (db.prepare('SELECT platform FROM api_keys WHERE id = ?').get(keyId) as { platform: string }).platform;
       const inserted = db.prepare(`
         INSERT INTO models (platform, model_id, display_name, intelligence_rank, speed_rank, size_label,
           monthly_token_budget, context_window, enabled, supports_vision, supports_tools, key_id, disabled_by)
-        VALUES ('custom', ?, ?, ?, ?, 'Small', '~1M', 128000, ?, 0, 1, ?, ?)
-      `).run(modelId, modelId, priority, priority, opts.enabled ?? 1, keyId, opts.disabledBy ?? null);
+        VALUES (?, ?, ?, ?, ?, 'Small', '~1M', 128000, ?, 0, 1, ?, ?)
+      `).run(platform, modelId, modelId, priority, priority, opts.enabled ?? 1, keyId, opts.disabledBy ?? null);
       const modelDbId = Number(inserted.lastInsertRowid);
       db.prepare('INSERT INTO fallback_config (model_db_id, priority, enabled) VALUES (?, ?, 1)').run(modelDbId, priority);
       return modelDbId;
@@ -192,6 +197,28 @@ describe('Keys API — model scope', () => {
       expect(patch.body.scopeSync).toEqual({ disabled: 0, restored: 0 });
       expect(modelRow(bound)).toEqual({ enabled: 1, disabled_by: null });
       expect(sibling).not.toBe(owner);
+    });
+
+    it('restores a sibling-bound catalog row when this account adds the model to its scope', async () => {
+      const insertCustomKey = (scope: string[]) => {
+        const { encrypted, iv, authTag } = encrypt('sk-test');
+        const result = getDb().prepare(`
+          INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled, base_url, model_scope_json)
+          VALUES ('custom', 'account', ?, ?, ?, 'healthy', 1, 'https://relay.example/v1', ?)
+        `).run(encrypted, iv, authTag, JSON.stringify(scope));
+        return Number(result.lastInsertRowid);
+      };
+      const owner = insertCustomKey(['keep']);
+      const second = insertCustomKey(['keep']);
+      const bound = bindModel(owner, 'shared', 1, { enabled: 0, disabledBy: 'scope' });
+      getDb().prepare("UPDATE models SET endpoint_scope = 'https://relay.example/v1' WHERE id = ?").run(bound);
+      getDb().prepare('UPDATE fallback_config SET enabled = 0 WHERE model_db_id = ?').run(bound);
+
+      const patch = await request(app, 'PATCH', `/api/keys/${second}`, { modelScope: ['keep', 'shared'] });
+      expect(patch.status).toBe(200);
+      expect(patch.body.scopeSync).toEqual({ disabled: 0, restored: 1 });
+      expect(modelRow(bound)).toEqual({ enabled: 1, disabled_by: null });
+      expect(chainRow(bound).enabled).toBe(1);
     });
 
     it('touches no model that is not bound to the key', async () => {

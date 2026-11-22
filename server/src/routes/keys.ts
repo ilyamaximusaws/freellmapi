@@ -2026,8 +2026,22 @@ function syncKeyBoundModelsToScope(
   keyId: number,
   scope: string[] | null,
 ): { disabled: number; restored: number } {
-  const rows = db.prepare('SELECT id, model_id, enabled, disabled_by FROM models WHERE key_id = ?')
-    .all(keyId) as { id: number; model_id: string; enabled: number; disabled_by: string | null }[];
+  const keyRow = db.prepare('SELECT platform, base_url FROM api_keys WHERE id = ?').get(keyId) as
+    { platform: string; base_url: string | null } | undefined;
+  if (!keyRow) return { disabled: 0, restored: 0 };
+
+  // Accounts on one endpoint share a single catalog row per model, bound to
+  // whichever key discovered it. Looking only at `key_id = keyId` made an
+  // account's own model switch a no-op for every model a sibling discovered:
+  // the scope grew, but the shared row stayed `disabled_by='scope'` and the
+  // router kept skipping it. Apply the scope across the whole endpoint pool.
+  const endpointScope = keyRow.platform === 'custom' ? endpointScopeForBaseUrl(keyRow.base_url) : null;
+  const rows = (keyRow.platform === 'custom'
+    ? db.prepare(`SELECT id, model_id, enabled, disabled_by FROM models
+                   WHERE platform = ? AND (endpoint_scope = ? OR key_id = ?)`)
+        .all(keyRow.platform, endpointScope, keyId)
+    : db.prepare('SELECT id, model_id, enabled, disabled_by FROM models WHERE platform = ?')
+        .all(keyRow.platform)) as Array<{ id: number; model_id: string; enabled: number; disabled_by: string | null }>;
   if (rows.length === 0) return { disabled: 0, restored: 0 };
 
   const allowed = scope === null ? null : new Set(scope);
@@ -2040,18 +2054,13 @@ function syncKeyBoundModelsToScope(
   const chainOn = db.prepare('UPDATE profile_models SET enabled = 1 WHERE model_db_id = ?');
   const globalOn = db.prepare('UPDATE fallback_config SET enabled = 1 WHERE model_db_id = ?');
 
-  const keyRow = db.prepare('SELECT platform, base_url FROM api_keys WHERE id = ?').get(keyId) as
-    { platform: string; base_url: string | null } | undefined;
-  // Two accounts on one relay share one catalog row (bound to whichever key
-  // discovered the model). A scope edit on ONE account must not take that row
-  // out of the chain while the sibling account still has the model in scope.
-  const siblings = keyRow
-    ? (db.prepare('SELECT id, model_scope_json, base_url FROM api_keys WHERE platform = ? AND enabled = 1 AND id != ?')
-        .all(keyRow.platform, keyId) as Array<{ id: number; model_scope_json: string | null; base_url: string | null }>)
-        .filter(sibling => keyRow.platform !== 'custom'
-          || endpointScopeForBaseUrl(sibling.base_url) === endpointScopeForBaseUrl(keyRow.base_url))
-        .map(sibling => ({ scope: parseModelScope(sibling.model_scope_json) }))
-    : [];
+  // A scope edit on ONE account must not take a shared catalog row out of the
+  // chain while a sibling enabled account on the same endpoint still serves it.
+  const siblings = (db.prepare('SELECT id, model_scope_json, base_url FROM api_keys WHERE platform = ? AND enabled = 1 AND id != ?')
+    .all(keyRow.platform, keyId) as Array<{ id: number; model_scope_json: string | null; base_url: string | null }>)
+    .filter(sibling => keyRow.platform !== 'custom'
+      || endpointScopeForBaseUrl(sibling.base_url) === endpointScope)
+    .map(sibling => ({ scope: parseModelScope(sibling.model_scope_json) }));
   const siblingAllows = (modelId: string) => siblings.some(sibling =>
     sibling.scope === null || sibling.scope.has(modelId));
 

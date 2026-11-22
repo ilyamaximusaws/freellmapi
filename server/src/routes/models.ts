@@ -542,6 +542,10 @@ modelsRouter.get('/', (_req: Request, res: Response) => {
     monthlyTokenBudget: m.monthly_token_budget,
     contextWindow: m.context_window,
     enabled: m.enabled === 1,
+    // Why a row is off: 'scope' means an account pool edit switched it off and
+    // a later scope edit may bring it back; 'user'/'catalog' stays off until
+    // someone enables it on the Models page.
+    disabledBy: m.disabled_by ?? null,
     supportsVision: m.supports_vision === 1,
     supportsTools: m.supports_tools === 1,
     priority: m.priority,
