@@ -71,6 +71,7 @@ import { withKeyProxy } from './proxy.js';
 import { getEndpointTimeBudgetMs } from './ttfb-budget.js';
 import { upstreamIdentity } from './endpoint-scope.js';
 import { learnOutputCapFromError, learnedOutputCap } from './output-cap.js';
+import { scheduleProviderAudit, shouldAuditAfterFailure } from '../services/provider-audit.js';
 
 // Every surface caps failover hops at the same number.
 export const FALLBACK_MAX_RETRIES = 20;
@@ -580,6 +581,18 @@ export function recordRetryableFailure(route: RouteResult, err: any, state: Fall
   if (consumeSkipBenchExemption(route, err)) return true;
   const decision = cooldownDecisionForError(route, err);
   setCooldown(route.platform, route.modelId, route.keyId, decision.durationMs, decision.source);
+  // Only failures that say something about the UPSTREAM trigger a pool audit.
+  // A 429 is a quota fact about this key, and auth/payment/model-access errors
+  // are facts about one credential — auditing after those would report a
+  // healthy provider as down and spend quota to do it.
+  if (shouldAuditAfterFailure(err)) {
+    scheduleProviderAudit({
+      platform: route.platform,
+      endpointScope: route.endpointScope,
+      triggerModelId: route.modelId,
+      triggerKeyId: route.keyId,
+    });
+  }
   // [fork 5/10] A 401/402/403 whose body names a fixable condition (verify your
   // phone, accept the new terms, add a card, claim the daily bonus) is not a
   // dead credential — it is a key waiting for a human. Flag it so the dashboard

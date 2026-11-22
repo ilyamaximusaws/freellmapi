@@ -176,7 +176,7 @@ describe('notification channel management ([fork 9/10])', () => {
 
   it('reads default settings with every event on', () => {
     const settings = getNotificationSettings();
-    expect(Object.keys(settings.events).length).toBe(7);
+    expect(Object.keys(settings.events).length).toBe(9);
     expect(Object.values(settings.events).every(Boolean)).toBe(true);
   });
 });

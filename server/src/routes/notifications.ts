@@ -6,6 +6,7 @@ import {
   type NotifyEvent,
 } from '../services/notifications.js';
 import { setSetting } from '../db/index.js';
+import { listSiteNotifications, markAllSiteNotificationsRead, markSiteNotificationRead } from '../services/site-notifications.js';
 
 /**
  * Notification channels and settings [fork 9/10].
@@ -117,6 +118,37 @@ notificationsRouter.delete('/channels/:id', (req: Request, res: Response) => {
     return;
   }
   res.json({ deleted: deleteChannel(id) });
+});
+
+// ── In-site feed ───────────────────────────────────────────────────────────
+// Provider audits (services/provider-audit.ts) write here so Ember can show an
+// alert even when no webhook or Telegram channel is configured.
+
+const feedQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  includeResolved: z.coerce.boolean().optional(),
+});
+
+notificationsRouter.get('/site', (req: Request, res: Response) => {
+  const parsed = feedQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: { message: 'Invalid query' } });
+    return;
+  }
+  res.json(listSiteNotifications(parsed.data.limit ?? 30, parsed.data.includeResolved ?? false));
+});
+
+notificationsRouter.post('/site/:id/read', (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: { message: 'Invalid notification id' } });
+    return;
+  }
+  res.json({ ok: markSiteNotificationRead(id) });
+});
+
+notificationsRouter.post('/site/read-all', (_req: Request, res: Response) => {
+  res.json({ marked: markAllSiteNotificationsRead() });
 });
 
 // Manual triggers ("test now"): sweep picks up current fleet state, flush pushes

@@ -4,6 +4,7 @@ import { getDb, isKeyStoreDecryptable } from '../db/index.js';
 import { checkKeyHealth, checkAllKeys, pollKeyQuota, supportsQuotaPolling } from '../services/health.js';
 import { getDegradationStatus } from '../services/degradation.js';
 import { runModelProbePass, selectModelProbeCandidatesByIds, selectProviderProbeCandidates } from '../services/model-probe.js';
+import { listProviderAudits } from '../services/provider-audit.js';
 import { hasProvider, resolveProvider } from '../providers/index.js';
 import { getQuotaStateForKeys } from '../services/provider-quota.js';
 import type { Platform } from '@freellmapi/shared/types.js';
@@ -150,7 +151,14 @@ healthRouter.get('/probe-status', (req: Request, res: Response) => {
     status: string; lastProbedAt: string | null; lastError: string | null;
     latencyMs: number | null; displayName: string | null; keyLabel: string | null;
   }>;
-  res.json({ rows, checks: [...activeProviderChecks.values()] });
+  res.json({ rows, checks: [...activeProviderChecks.values()], audits: listProviderAudits() });
+});
+
+// Latest background pool-audit verdict per upstream. Written by
+// services/provider-audit.ts when a live request failed; Ember shows it on the
+// provider cards so an unstable pool is visible without opening a dialog.
+healthRouter.get('/provider-audits', (_req: Request, res: Response) => {
+  res.json({ audits: listProviderAudits() });
 });
 
 // Start a provider check. It runs in the background so slow models cannot

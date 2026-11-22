@@ -29,6 +29,8 @@ export const NOTIFY_EVENTS = [
   'cap_soft',
   'cap_hard',
   'provider_no_keys',
+  'provider_unstable',
+  'provider_down',
   'ready_upstreams_low',
   'action_needed',
   'key_expiring',
