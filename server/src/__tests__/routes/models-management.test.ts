@@ -122,6 +122,32 @@ describe('Model management API', () => {
     expect(item.fallbackEnabled).toBe(false);
   });
 
+  it('does not advertise a catalog-disabled row as chain-enabled or routable', async () => {
+    const db = getDb();
+    const target = db.prepare(`
+      SELECT id FROM models
+       WHERE platform = 'groq' AND key_id IS NULL
+       ORDER BY id LIMIT 1
+    `).get() as { id: number };
+
+    try {
+      db.prepare('UPDATE models SET enabled = 0 WHERE id = ?').run(target.id);
+      db.prepare('UPDATE fallback_config SET enabled = 1 WHERE model_db_id = ?').run(target.id);
+
+      const listed = await request(app, 'GET', '/api/models');
+      const item = listed.body.find((m: any) => m.id === target.id);
+      expect(item).toMatchObject({
+        enabled: false,
+        catalogEnabled: false,
+        chainEnabled: false,
+        fallbackEnabled: false,
+        routable: false,
+      });
+    } finally {
+      db.prepare('UPDATE models SET enabled = 1 WHERE id = ?').run(target.id);
+    }
+  });
+
   it('clears a local override once the field returns to its pre-override value (#1178)', async () => {
     const db = getDb();
     // A fresh catalog-managed row: supports_vision defaults to 0, so that is
