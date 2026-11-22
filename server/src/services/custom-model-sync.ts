@@ -3,7 +3,7 @@ import type { Scheduler } from '../lib/scheduler.js';
 import { discoverEndpointModels } from './model-discovery.js';
 import { registerCustomModels, type CustomModelEntry } from './custom-model-register.js';
 import { isCustomModelTombstoned } from './custom-model-tombstone.js';
-import { listCustomEndpoints } from './custom-endpoint.js';
+import { listCustomEndpoints, type CustomEndpointCredential } from './custom-endpoint.js';
 import { endpointScopeForBaseUrl } from '../lib/endpoint-scope.js';
 
 // ── Scheduled custom-model sync (#674/#663/#656) ─────────────────────────────
@@ -69,6 +69,81 @@ export interface CustomModelSyncResult {
   failures: Array<{ baseUrl: string; error: string }>;
 }
 
+/** What one endpoint's refresh actually did. Shared by the scheduled pass and
+ *  the operator's "Refresh models" button so the two can never drift. */
+export interface CustomEndpointSyncResult {
+  /** Models the endpoint listed today. */
+  discovered: number;
+  /** Newly registered model ids. */
+  added: string[];
+  skipped: number;
+  paidSkipped: number;
+  tombstoned: number;
+  nonChatSkipped: number;
+}
+
+/** Discover one custom endpoint's models and register the NEW chat models,
+ *  add-only. Throws when the endpoint cannot be reached. */
+export async function syncCustomEndpoint(db: Db, endpoint: CustomEndpointCredential): Promise<CustomEndpointSyncResult> {
+  const result: CustomEndpointSyncResult = {
+    discovered: 0, added: [], skipped: 0, paidSkipped: 0, tombstoned: 0, nonChatSkipped: 0,
+  };
+
+  // A submitted key wins on the manual route; a scheduled pass can only use
+  // what the endpoint already has on record. Keyless local servers keep the
+  // 'no-key' sentinel, which the provider turns into an anonymous call
+  // with no Authorization header (#1331).
+  const discovered = await discoverEndpointModels(endpoint.baseUrl, endpoint.apiKey ?? 'no-key');
+  result.discovered = discovered.length;
+
+  const scope = endpointScopeForBaseUrl(endpoint.baseUrl);
+  const registeredIds = new Set(
+    (db.prepare("SELECT model_id FROM models WHERE platform = 'custom' AND endpoint_scope = ?").all(scope) as { model_id: string }[])
+      .map(row => row.model_id),
+  );
+
+  const freePatterns = customModelSyncFreePatterns();
+  const fresh: CustomModelEntry[] = [];
+  for (const model of discovered) {
+    if (registeredIds.has(model.id)) {
+      result.skipped += 1;
+      continue;
+    }
+    // #926: the operator deleted this model (or the key that owned it) and
+    // expects it to stay gone. The sync's "add only" contract must not turn
+    // a deliberate deletion into the next pass's "new model".
+    if (isCustomModelTombstoned(db, scope, model.id)) {
+      result.tombstoned += 1;
+      continue;
+    }
+    // Free-only policy (#746): when FREE_PATTERNS is configured, a model
+    // that matches none of the known-free patterns is presumably paid and
+    // is skipped rather than silently registered.
+    if (freePatterns.length > 0 && !freePatterns.some(p => patternMatches(p, model.id))) {
+      result.paidSkipped += 1;
+      continue;
+    }
+    // #1051: a diffusion/whisper/video/embedding id is not a chat model,
+    // and registering it here is how it ends up 404ing in every chain.
+    // The sync only ADDS chat models; media and embedding models go
+    // through their own explicit registration paths.
+    if (model.kind !== undefined) {
+      result.nonChatSkipped += 1;
+      continue;
+    }
+    // Bare id only, like the dashboard's bulk "Fetch models" submit: no name
+    // or capability claims invented here, they resolve in SQL on insert.
+    fresh.push({ modelId: model.id, displayName: null });
+  }
+
+  if (fresh.length > 0) {
+    const registered = registerCustomModels(db, endpoint.baseUrl, undefined, undefined, endpoint.keyId, fresh);
+    result.added = registered.registered.filter(m => m.created).map(m => m.model);
+  }
+
+  return result;
+}
+
 /** Sync every configured custom endpoint once. Exported so tests (and an admin
  *  that wants a manual pass) can run it directly without waiting for the timer. */
 export async function runCustomModelSync(db: Db): Promise<CustomModelSyncResult> {
@@ -77,56 +152,12 @@ export async function runCustomModelSync(db: Db): Promise<CustomModelSyncResult>
 
   for (const endpoint of endpoints) {
     try {
-      // A submitted key wins on the manual route; a scheduled pass can only use
-      // what the endpoint already has on record. Keyless local servers keep the
-      // 'no-key' sentinel, which the provider turns into an anonymous call
-      // with no Authorization header (#1331).
-      const discovered = await discoverEndpointModels(endpoint.baseUrl, endpoint.apiKey ?? 'no-key');
-
-      const scope = endpointScopeForBaseUrl(endpoint.baseUrl);
-      const registeredIds = new Set(
-        (db.prepare("SELECT model_id FROM models WHERE platform = 'custom' AND endpoint_scope = ?").all(scope) as { model_id: string }[])
-          .map(row => row.model_id),
-      );
-
-      const freePatterns = customModelSyncFreePatterns();
-      const fresh: CustomModelEntry[] = [];
-      for (const model of discovered) {
-        if (registeredIds.has(model.id)) {
-          result.skipped += 1;
-          continue;
-        }
-        // #926: the operator deleted this model (or the key that owned it) and
-        // expects it to stay gone. The sync's "add only" contract must not turn
-        // a deliberate deletion into the next pass's "new model".
-        if (isCustomModelTombstoned(db, scope, model.id)) {
-          result.tombstoned += 1;
-          continue;
-        }
-        // Free-only policy (#746): when FREE_PATTERNS is configured, a model
-        // that matches none of the known-free patterns is presumably paid and
-        // is skipped rather than silently registered.
-        if (freePatterns.length > 0 && !freePatterns.some(p => patternMatches(p, model.id))) {
-          result.paidSkipped += 1;
-          continue;
-        }
-        // #1051: a diffusion/whisper/video/embedding id is not a chat model,
-        // and registering it here is how it ends up 404ing in every chain.
-        // The sync only ADDS chat models; media and embedding models go
-        // through their own explicit registration paths.
-        if (model.kind !== undefined) {
-          result.nonChatSkipped += 1;
-          continue;
-        }
-        // Bare id only, like the dashboard's bulk "Fetch models" submit: no name
-        // or capability claims invented here, they resolve in SQL on insert.
-        fresh.push({ modelId: model.id, displayName: null });
-      }
-
-      if (fresh.length > 0) {
-        const registered = registerCustomModels(db, endpoint.baseUrl, undefined, undefined, endpoint.keyId, fresh);
-        result.added += registered.registered.filter(m => m.created).length;
-      }
+      const one = await syncCustomEndpoint(db, endpoint);
+      result.added += one.added.length;
+      result.skipped += one.skipped;
+      result.paidSkipped += one.paidSkipped;
+      result.tombstoned += one.tombstoned;
+      result.nonChatSkipped += one.nonChatSkipped;
     } catch (err: any) {
       const message = err?.message ?? String(err);
       result.failures.push({ baseUrl: endpoint.baseUrl, error: message });

@@ -52,6 +52,7 @@ import {
   registeredModelIds,
   triggerBuiltinModelDiscovery,
 } from '../services/builtin-model-discovery.js';
+import { refreshProviderModels, RefreshModelsError } from '../services/provider-model-refresh.js';
 import type { Db } from '../db/types.js';
 import type { Platform } from '@freellmapi/shared/types.js';
 import { parseModelScope } from '../lib/model-scope.js';
@@ -1178,6 +1179,55 @@ async function rejectUnsafeBaseUrl(baseUrl: string, res: Response): Promise<bool
 // immediately. This reads ONLY the operator's own base_url with the operator's
 // own key — it never reads or refreshes the published provider catalog. Nothing
 // is written: the picked ids come back through POST /custom to be registered.
+const refreshModelsSchema = z.object({
+  platform: z.string().trim().min(1).max(64).optional(),
+  baseUrl: z.string().trim().min(1).max(2048).optional(),
+  keyId: z.number().int().positive().optional(),
+});
+
+// "Refresh models" on a provider card: ask the source that owns the model list
+// what it serves today, then register the NEW chat models add-only. For a
+// custom relay that source is the relay itself; for a catalog-managed built-in
+// it is the signed catalog (see services/provider-model-refresh.ts).
+keysRouter.post('/refresh-models', async (req: Request, res: Response) => {
+  const parsed = refreshModelsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: { message: parsed.error.issues[0]?.message ?? 'Invalid refresh request' } });
+    return;
+  }
+  const db = getDb();
+  let platform = parsed.data.platform ?? '';
+  let baseUrl = parsed.data.baseUrl ?? null;
+  const keyId = parsed.data.keyId ?? null;
+
+  if (!platform && keyId != null) {
+    const row = db.prepare('SELECT platform, base_url FROM api_keys WHERE id = ?').get(keyId) as
+      { platform: string; base_url: string | null } | undefined;
+    if (!row) {
+      res.status(404).json({ error: { message: 'No key with that id.' } });
+      return;
+    }
+    platform = row.platform;
+    baseUrl = baseUrl ?? row.base_url;
+  }
+  if (!platform && baseUrl) platform = 'custom';
+  if (!platform) {
+    res.status(400).json({ error: { message: 'platform or keyId is required' } });
+    return;
+  }
+
+  try {
+    const result = await refreshProviderModels(db, { platform, baseUrl, keyId });
+    res.json(result);
+  } catch (err: any) {
+    if (err instanceof RefreshModelsError) {
+      res.status(err.status).json({ error: { message: err.message } });
+      return;
+    }
+    res.status(502).json({ error: { message: `Model refresh failed: ${err?.message ?? 'unknown error'}` } });
+  }
+});
+
 const discoverModelsSchema = z.object({
   baseUrl: z.string().url('baseUrl must be a valid URL').optional(),
   keyId: z.number().int().positive().optional(),
