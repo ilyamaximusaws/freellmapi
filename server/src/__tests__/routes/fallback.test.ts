@@ -475,4 +475,37 @@ describe('Fallback API', () => {
     const { status: tsStatus } = await request(app, 'POST', '/api/fallback/sort/toString');
     expect(tsStatus).toBe(400);
   });
+
+  it('marks a paused provider as configured but inactive in the chain', async () => {
+    const db = getDb();
+    const platform = 'paused-provider';
+    const modelDbId = Number(db.prepare(`
+      INSERT INTO models (platform, model_id, display_name, intelligence_rank, speed_rank, size_label, enabled)
+      VALUES (?, 'paused-model', 'Paused model', 9001, 9001, 'Small', 1)
+    `).run(platform).lastInsertRowid);
+    db.prepare('INSERT INTO fallback_config (model_db_id, priority, enabled) VALUES (?, 9001, 1)').run(modelDbId);
+    const secret = encrypt('paused-key');
+    const keyId = Number(db.prepare(`
+      INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
+      VALUES (?, 'paused', ?, ?, ?, 'healthy', 0)
+    `).run(platform, secret.encrypted, secret.iv, secret.authTag).lastInsertRowid);
+
+    const readRow = async () => {
+      const { body } = await request(app, 'GET', '/api/fallback');
+      return (body as any[]).find(row => row.modelDbId === modelDbId);
+    };
+    const paused = await readRow();
+    expect(paused.configured).toBe(true);
+    expect(paused.active).toBe(false);
+    expect(paused.keyCount).toBe(0);
+
+    db.prepare('UPDATE api_keys SET enabled = 1 WHERE id = ?').run(keyId);
+    const resumed = await readRow();
+    expect(resumed.active).toBe(true);
+    expect(resumed.keyCount).toBe(1);
+
+    db.prepare('DELETE FROM api_keys WHERE id = ?').run(keyId);
+    db.prepare('DELETE FROM fallback_config WHERE model_db_id = ?').run(modelDbId);
+    db.prepare('DELETE FROM models WHERE id = ?').run(modelDbId);
+  });
 });

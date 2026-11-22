@@ -255,12 +255,25 @@ fallbackRouter.get('/', (req: Request, res: Response) => {
   // Count usable keys per platform — enabled AND healthy/unknown status. Unified
   // with /token-usage and the routing scorer (#456) so budget pooling is computed
   // from the same key set everywhere (a disabled or invalid key adds no capacity).
-  const keyCounts = db.prepare(`
-    SELECT platform, COUNT(*) as count
+  // Custom relays share the 'custom' platform, so their counts must be resolved
+  // per endpoint: a chain row of a paused relay otherwise looked served by a key
+  // that actually belongs to a different relay.
+  const usableKeyRows = db.prepare(`
+    SELECT platform, base_url, model_scope_json
     FROM api_keys WHERE enabled = 1 AND status IN ('healthy', 'unknown')
-    GROUP BY platform
-  `).all() as { platform: string; count: number }[];
-  const keyCountMap = new Map(keyCounts.map(k => [k.platform, k.count]));
+  `).all() as Array<{ platform: string; base_url: string | null; model_scope_json: string | null }>;
+  const usableKeys = usableKeyRows.map(key => ({
+    platform: key.platform,
+    endpoint: key.platform === 'custom' ? endpointScopeForBaseUrl(key.base_url) : '',
+    scope: parseModelScope(key.model_scope_json),
+  }));
+  /** Enabled credentials that may serve this exact row (endpoint + scope aware). */
+  const servingKeyCount = (r: { platform: string; model_id: string; endpoint_scope?: string | null }): number => {
+    const endpoint = r.platform === 'custom' ? endpointScopeForBaseUrl(r.endpoint_scope ?? '') : '';
+    return usableKeys.filter(key => key.platform === r.platform
+      && (r.platform !== 'custom' || (endpoint !== '' && key.endpoint === endpoint))
+      && scopeAllows(key.scope, r.model_id)).length;
+  };
 
   // Which providers this install actually has credentials for. The chain table
   // still holds catalog rows for platforms with no key (Groq showed up on
@@ -324,7 +337,7 @@ fallbackRouter.get('/', (req: Request, res: Response) => {
       // Parsed once here (single source of truth) so the dashboard never re-implements
       // budget-label parsing; 0 for rate-limited/placeholder labels. See lib/budget.ts.
       // Scaled by healthy/enabled key count for multi-account pooled capacity.
-      monthlyTokenBudgetTokens: parseBudget(r.monthly_token_budget) * Math.max(1, keyCountMap.get(r.platform) ?? 1),
+      monthlyTokenBudgetTokens: parseBudget(r.monthly_token_budget) * Math.max(1, servingKeyCount(r)),
       supportsVision: r.supports_vision === 1,
       supportsTools: r.supports_tools === 1,
       // 'discovered' (#1348): fetched from a built-in provider's /models because
@@ -352,7 +365,11 @@ fallbackRouter.get('/', (req: Request, res: Response) => {
       // provider's own (redacted) wording.
       retiredUpstream: r.tombstone_source === 'upstream_eol',
       retiredReason: r.tombstone_source === 'upstream_eol' ? (r.tombstone_reason ?? null) : null,
-      keyCount: keyCountMap.get(r.platform) ?? 0,
+      keyCount: servingKeyCount(r),
+      // A provider that is configured but paused has no credential the router
+      // may use. Routing must not list it, otherwise a disabled relay looks like
+      // an active part of the chain (and its log rows read as live traffic).
+      active: servingKeyCount(r) > 0,
       // False when no credential exists for this row's provider. The chain is
       // still stored (removing a key must not silently rewrite the operator's
       // order), but the UI hides these rows instead of showing phantom models.
