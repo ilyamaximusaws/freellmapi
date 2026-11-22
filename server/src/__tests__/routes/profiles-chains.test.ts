@@ -295,4 +295,17 @@ describe('named fallback chains', () => {
     expect(denied.status).toBe(403);
     expect(denied.body.error.message).toMatch(/built-in/i);
   });
+
+  it('lists chains with their size and marks the one Routing writes into', async () => {
+    const chain = (await request('POST', '/api/profiles', { name: 'listed', empty: true })).body;
+    await request('POST', '/api/profiles/active', { profileId: chain.id });
+
+    const { status, body } = await request('GET', '/api/profiles');
+    expect(status).toBe(200);
+
+    const listed = (body as any[]).find(row => row.id === chain.id);
+    expect(listed).toMatchObject({ modelCount: 0, enabledCount: 0, isActive: true });
+    // Exactly one chain owns the operator's edits — the Routing page has to name it.
+    expect((body as any[]).filter(row => row.isActive)).toHaveLength(1);
+  });
 });

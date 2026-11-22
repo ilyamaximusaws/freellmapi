@@ -69,11 +69,34 @@ function getId(req: Request): number {
 profilesRouter.get('/', (_req: Request, res: Response) => {
   const db = getDb();
   const profiles = db.prepare(`
-    SELECT id, name, emoji, color, type, is_favorite, sort_order, auto_sort, routing_strategy, layout_config, auto_include_new_models, created_at
-    FROM profiles
-    ORDER BY (CASE WHEN type = 'default' THEN 1 ELSE 0 END) DESC, is_favorite DESC, sort_order ASC, id ASC
-  `).all();
-  res.json(profiles);
+    SELECT p.id, p.name, p.emoji, p.color, p.type, p.is_favorite, p.sort_order, p.auto_sort,
+           p.routing_strategy, p.layout_config, p.auto_include_new_models, p.created_at,
+           (SELECT COUNT(*) FROM profile_models pm WHERE pm.profile_id = p.id) AS model_count,
+           (SELECT COUNT(*) FROM profile_models pm JOIN models m ON m.id = pm.model_db_id
+             WHERE pm.profile_id = p.id AND pm.enabled = 1 AND m.enabled = 1) AS enabled_count
+    FROM profiles p
+    ORDER BY (CASE WHEN p.type = 'default' THEN 1 ELSE 0 END) DESC, p.is_favorite DESC, p.sort_order ASC, p.id ASC
+  `).all() as Array<Record<string, unknown> & { id: number }>;
+
+  // Which chain the Routing page writes into. Without it a chain list cannot say
+  // where the operator's edits actually land.
+  const activeRow = db.prepare(`SELECT value FROM settings WHERE key = 'active_profile_id'`).get() as { value: string } | undefined;
+  const activeId = activeRow ? (parseInt(activeRow.value) || null) : null;
+
+  res.json(profiles.map(profile => ({
+    ...profile,
+    // Camel aliases for the Ember dashboard; the raw snake_case columns stay put
+    // because the bundled React client still reads them.
+    isFavorite: profile.is_favorite === 1,
+    sortOrder: profile.sort_order,
+    autoSort: profile.auto_sort,
+    routingStrategy: profile.routing_strategy,
+    autoIncludeNewModels: profile.auto_include_new_models === 1,
+    createdAt: profile.created_at,
+    modelCount: Number(profile.model_count ?? 0),
+    enabledCount: Number(profile.enabled_count ?? 0),
+    isActive: profile.id === activeId,
+  })));
 });
 
 // GET /api/profiles/active — get the currently active profile id
