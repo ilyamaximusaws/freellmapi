@@ -139,7 +139,8 @@ healthRouter.get('/probe-status', (req: Request, res: Response) => {
   const endpointScope = typeof req.query.endpointScope === 'string' ? req.query.endpointScope : null;
   const rows = getDb().prepare(`
     SELECT m.id AS modelDbId, s.platform, s.model_id AS modelId, s.endpoint_scope AS endpointScope, s.key_id AS keyId,
-           s.status, s.last_probed_at AS lastProbedAt, s.last_error AS lastError, s.latency_ms AS latencyMs,
+           CASE WHEN s.status = 'working' AND s.last_error IS NOT NULL THEN 'error' ELSE s.status END AS status,
+           s.last_probed_at AS lastProbedAt, s.last_error AS lastError, s.latency_ms AS latencyMs,
            m.display_name AS displayName, k.label AS keyLabel
       FROM model_probe_status s
       LEFT JOIN models m ON m.platform = s.platform AND m.model_id = s.model_id AND m.endpoint_scope = s.endpoint_scope

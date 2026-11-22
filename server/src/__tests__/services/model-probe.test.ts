@@ -203,13 +203,15 @@ describe('recording', () => {
     expect(row.last_error).toBeNull();
   });
 
-  it('an inconclusive probe preserves the previous verdict', () => {
+  it('an inconclusive probe replaces a stale working verdict', () => {
     const db = getDb();
     recordProbeResult(db, candidate(), { status: 'working', latencyMs: 10 });
-    recordProbeResult(db, candidate(), { status: 'error', error: 'fetch failed' });
+    recordProbeResult(db, candidate(), { status: 'error', error: 'fetch failed (UND_ERR_CONNECT_TIMEOUT api.reformboss.com)' });
     const row = db.prepare('SELECT * FROM model_probe_status').get() as any;
-    expect(row.status).toBe('working');
-    expect(row.last_error).toBe('fetch failed');
+    // Showing "Available" next to a fresh connect timeout is wrong: the last
+    // check never reached the provider.
+    expect(row.status).toBe('error');
+    expect(row.last_error).toContain('UND_ERR_CONNECT_TIMEOUT');
   });
 
   it('keeps the reason on an unavailable verdict', () => {

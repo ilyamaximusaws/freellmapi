@@ -291,22 +291,11 @@ export async function probeModel(candidate: ProbeCandidate, deps: ModelProbeRequ
 // ── Recording ────────────────────────────────────────────────────────────────
 
 export function recordProbeResult(db: Db, candidate: ProbeCandidate, outcome: ProbeOutcome, probedAt = new Date()): void {
-  if (outcome.status === 'error') {
-    // Inconclusive: do not overwrite the last real verdict, but keep the
-    // diagnostic and refresh the timestamp so pacing/backoff can see it. If no
-    // verdict exists yet, record the inconclusive itself so the UI can show it.
-    const updated = db.prepare(`
-      UPDATE model_probe_status SET last_error = ?, last_probed_at = datetime('now')
-       WHERE platform = ? AND model_id = ? AND endpoint_scope = ? AND key_id = ?
-    `).run(outcome.error ?? 'probe error', candidate.platform, candidate.modelId, candidate.endpointScope, candidate.keyId);
-    if (!updated.changes) {
-      db.prepare(`
-        INSERT INTO model_probe_status (platform, model_id, endpoint_scope, key_id, status, last_probed_at, last_error, latency_ms)
-        VALUES (?, ?, ?, ?, 'error', datetime('now'), ?, ?)
-      `).run(candidate.platform, candidate.modelId, candidate.endpointScope, candidate.keyId, outcome.error ?? 'probe error', outcome.latencyMs ?? null);
-    }
-    return;
-  }
+  // An inconclusive attempt (timeout, fetch failed) replaces the verdict.
+  // Keeping an old 'working' status while storing the timeout text made the UI
+  // print "Available · fetch failed (UND_ERR_CONNECT_TIMEOUT ...)", which is
+  // exactly backwards: the last check did not reach the provider and must be
+  // shown as inconclusive, not as availability.
   db.prepare(`
     INSERT INTO model_probe_status (platform, model_id, endpoint_scope, key_id, status, last_probed_at, last_error, latency_ms)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
