@@ -67,6 +67,11 @@ const chatFail = (message: string) => vi.fn(async () => { throw new Error(messag
 const noJitter = () => 0;
 
 describe('candidate selection', () => {
+  it('selects every model when the limit is zero', () => {
+    for (const id of [1, 2, 3]) addModel(id, `m${id}`);
+    expect(selectProviderProbeCandidates(getDb(), 'probe-test', null, 0)).toHaveLength(3);
+  });
+
   it('includes disabled models when the operator asks to check a provider', () => {
     addModel(1, 'on');
     addModel(2, 'off', { enabled: 0 });
@@ -196,6 +201,14 @@ describe('recording', () => {
     const row = db.prepare('SELECT * FROM model_probe_status').get() as any;
     expect(row.status).toBe('working');
     expect(row.last_error).toBe('fetch failed');
+  });
+
+  it('keeps the reason on an unavailable verdict', () => {
+    const db = getDb();
+    recordProbeResult(db, candidate(), { status: 'unavailable', error: '404: model not found' });
+    const row = db.prepare('SELECT * FROM model_probe_status').get() as any;
+    expect(row.status).toBe('unavailable');
+    expect(row.last_error).toBe('404: model not found');
   });
 
   it('records the first inconclusive probe so the UI can show it', () => {

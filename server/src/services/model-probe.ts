@@ -175,7 +175,7 @@ export function selectProviderProbeCandidates(
       modelDbId: row.modelDbId,
       endpointScope: row.endpointScope,
     });
-    if (out.length >= limit) break;
+    if (limit > 0 && out.length >= limit) break;
   }
   return out;
 }
@@ -279,15 +279,15 @@ export function recordProbeResult(db: Db, candidate: ProbeCandidate, outcome: Pr
   }
   db.prepare(`
     INSERT INTO model_probe_status (platform, model_id, endpoint_scope, key_id, status, last_probed_at, last_error, latency_ms)
-    VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(platform, model_id, endpoint_scope, key_id) DO UPDATE SET
       status = excluded.status,
       last_probed_at = excluded.last_probed_at,
-      last_error = NULL,
+      last_error = excluded.last_error,
       latency_ms = excluded.latency_ms
   `).run(
     candidate.platform, candidate.modelId, candidate.endpointScope, candidate.keyId,
-    outcome.status, probedAt.toISOString(), outcome.latencyMs ?? null,
+    outcome.status, probedAt.toISOString(), outcome.error ?? null, outcome.latencyMs ?? null,
   );
 }
 

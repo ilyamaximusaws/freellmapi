@@ -158,12 +158,13 @@ healthRouter.get('/probe-status', (req: Request, res: Response) => {
 // Without a platform this remains the legacy synchronous full pass.
 healthRouter.post('/probe-models', async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as {
-    platform?: unknown; endpointScope?: unknown; limit?: unknown; timeoutMs?: unknown
+    platform?: unknown; endpointScope?: unknown; limit?: unknown; timeoutMs?: unknown; all?: unknown
   };
   const platform = typeof body.platform === 'string' && body.platform.trim() ? body.platform.trim() : null;
   const endpointScope = typeof body.endpointScope === 'string' ? body.endpointScope : null;
   const parsedLimit = Number(body.limit);
-  const limit = Number.isInteger(parsedLimit) ? Math.max(1, Math.min(100, parsedLimit)) : 10;
+  const checkAll = body.all === true || parsedLimit === 0;
+  const limit = checkAll ? 0 : Number.isInteger(parsedLimit) ? Math.max(1, Math.min(100, parsedLimit)) : 10;
   const parsedTimeout = Number(body.timeoutMs);
   const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0
     ? Math.max(3_000, Math.min(60_000, parsedTimeout))
@@ -193,7 +194,7 @@ healthRouter.post('/probe-models', async (req: Request, res: Response) => {
 
   void runModelProbePass({
     force: true,
-    maxProbes: limit,
+    maxProbes: checkAll ? candidates.length : limit,
     concurrency: 4,
     timeoutMs,
     select: () => candidates,
