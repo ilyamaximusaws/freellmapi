@@ -10,6 +10,19 @@ import type { Platform } from '@freellmapi/shared/types.js';
 
 export const healthRouter = Router();
 
+// Operator checks are asynchronous: the POST only starts a bounded pass and
+// Ember polls /probe-status for progress and for each finished model.
+export interface ProviderProbeCheck {
+  platform: string
+  endpointScope: string | null
+  total: number
+  done: number
+  timeoutMs: number
+  startedAt: string
+}
+const activeProviderChecks = new Map<string, ProviderProbeCheck>()
+const checkKey = (platform: string, endpointScope: string | null) => `${platform}:${endpointScope ?? ''}`
+
 // Get health status for all platforms
 healthRouter.get('/', (_req: Request, res: Response) => {
   const db = getDb();
@@ -137,41 +150,59 @@ healthRouter.get('/probe-status', (req: Request, res: Response) => {
     status: string; lastProbedAt: string | null; lastError: string | null;
     latencyMs: number | null; displayName: string | null; keyLabel: string | null;
   }>;
-  res.json({ rows });
+  res.json({ rows, checks: [...activeProviderChecks.values()] });
 });
 
-// Run a model-probe pass now. Without a platform this is the legacy full pass;
-// with one it checks that provider's models immediately (no stagger, no freshness
-// skip), one credential per model, capped at `limit` real chat requests.
+// Start a provider check. It runs in the background so slow models cannot
+// freeze the UI: Ember polls /probe-status for `checks` progress and rows.
+// Without a platform this remains the legacy synchronous full pass.
 healthRouter.post('/probe-models', async (req: Request, res: Response) => {
-  const body = (req.body ?? {}) as { platform?: unknown; endpointScope?: unknown; limit?: unknown };
+  const body = (req.body ?? {}) as {
+    platform?: unknown; endpointScope?: unknown; limit?: unknown; timeoutMs?: unknown
+  };
   const platform = typeof body.platform === 'string' && body.platform.trim() ? body.platform.trim() : null;
   const endpointScope = typeof body.endpointScope === 'string' ? body.endpointScope : null;
   const parsedLimit = Number(body.limit);
-  const limit = Number.isInteger(parsedLimit) ? Math.max(1, Math.min(50, parsedLimit)) : 10;
-  const result = platform
-    ? await runModelProbePass({
-        force: true,
-        maxProbes: limit,
-        concurrency: 6,
-        timeoutMs: 8_000,
-        select: () => selectProviderProbeCandidates(getDb(), platform, endpointScope, limit),
-      })
-    : await runModelProbePass();
-  res.json({
-    probed: result.probed.map(c => ({
-      platform: c.platform,
-      modelId: c.modelId,
-      keyId: c.keyId,
-      endpointScope: c.endpointScope,
-    })),
-    outcomes: result.outcomes.map(o => ({
-      platform: o.platform,
-      modelId: o.modelId,
-      keyId: o.keyId,
-      status: o.outcome.status,
-      latencyMs: o.outcome.latencyMs ?? null,
-      error: o.outcome.error ?? null,
-    })),
+  const limit = Number.isInteger(parsedLimit) ? Math.max(1, Math.min(100, parsedLimit)) : 10;
+  const parsedTimeout = Number(body.timeoutMs);
+  const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0
+    ? Math.max(3_000, Math.min(60_000, parsedTimeout))
+    : 30_000;
+
+  if (!platform) {
+    await runModelProbePass();
+    res.json({ started: true, total: 0, timeoutMs });
+    return;
+  }
+
+  const key = checkKey(platform, endpointScope);
+  const existing = activeProviderChecks.get(key);
+  if (existing) {
+    res.status(202).json({ started: false, alreadyRunning: true, ...existing });
+    return;
+  }
+
+  // Include disabled models: availability is useful precisely when a model is
+  // off in Ember, and the operator decides whether to turn it back on.
+  const candidates = selectProviderProbeCandidates(getDb(), platform, endpointScope, limit, true);
+  const check: ProviderProbeCheck = {
+    platform, endpointScope, total: candidates.length, done: 0,
+    timeoutMs, startedAt: new Date().toISOString(),
+  };
+  activeProviderChecks.set(key, check);
+
+  void runModelProbePass({
+    force: true,
+    maxProbes: limit,
+    concurrency: 4,
+    timeoutMs,
+    select: () => candidates,
+    onProgress: done => { check.done = done; },
+  }).catch(error => {
+    console.error(`[ModelProbe] provider check failed for ${platform}:`, error);
+  }).finally(() => {
+    activeProviderChecks.delete(key);
   });
+
+  res.status(202).json({ started: candidates.length > 0, total: candidates.length, timeoutMs });
 });

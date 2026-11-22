@@ -67,6 +67,15 @@ const chatFail = (message: string) => vi.fn(async () => { throw new Error(messag
 const noJitter = () => 0;
 
 describe('candidate selection', () => {
+  it('includes disabled models when the operator asks to check a provider', () => {
+    addModel(1, 'on');
+    addModel(2, 'off', { enabled: 0 });
+    const enabledOnly = selectProviderProbeCandidates(getDb(), 'probe-test', null, 10);
+    const all = selectProviderProbeCandidates(getDb(), 'probe-test', null, 10, true);
+    expect(enabledOnly.map(candidate => candidate.modelId)).toEqual(['on']);
+    expect(all.map(candidate => candidate.modelId)).toEqual(['on', 'off']);
+  });
+
   it('selects one credential per model for a provider check', () => {
     const db = getDb();
     db.prepare(`INSERT INTO api_keys (id, platform, label, encrypted_key, iv, auth_tag, status, enabled)
@@ -97,6 +106,16 @@ describe('candidate selection', () => {
     });
     expect(pass.outcomes).toHaveLength(6);
     expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('reports progress after each finished model', async () => {
+    const list = seedCandidates(3);
+    const progress: number[] = [];
+    await runModelProbePass({
+      select: selectFrom(list), maxProbes: 3, force: true, concurrency: 1,
+      chat: chatOk(), onProgress: done => { progress.push(done); },
+    });
+    expect(progress).toEqual([1, 2, 3]);
   });
 
   it('enforces the caller deadline when the adapter hangs', async () => {

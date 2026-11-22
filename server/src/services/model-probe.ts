@@ -148,16 +148,18 @@ export function selectProviderProbeCandidates(
   platform: string,
   endpointScope: string | null,
   limit: number,
+  includeDisabled = false,
 ): ProbeCandidate[] {
   const rows = db.prepare(`
     SELECT m.id AS modelDbId, m.platform, m.model_id AS modelId, m.endpoint_scope AS endpointScope,
            k.id AS keyId, k.base_url AS baseUrl
       FROM models m
-      JOIN api_keys k ON k.platform = m.platform AND k.enabled = 1 AND k.status IN ('healthy', 'unknown')
-     WHERE m.enabled = 1 AND m.platform = ?
+      JOIN api_keys k ON k.enabled = 1
+        AND (k.id = m.key_id OR (m.key_id IS NULL AND k.platform = m.platform))
+     WHERE (? IS NULL OR m.enabled = 1) AND m.platform = ?
        AND (? IS NULL OR m.endpoint_scope = ?)
-     ORDER BY m.id, k.id
-  `).all(platform, endpointScope, endpointScope) as Array<ProbeCandidate & { baseUrl: string | null }>;
+     ORDER BY m.enabled DESC, m.id, k.id
+  `).all(includeDisabled ? null : 1, platform, endpointScope, endpointScope) as Array<ProbeCandidate & { baseUrl: string | null }>;
 
   const seen = new Set<string>();
   const out: ProbeCandidate[] = [];
@@ -319,6 +321,8 @@ export interface ProbePassOptions extends ModelProbeRequestDeps {
   jitter?: () => number; // [0, 1), defaults to Math.random
   maxProbes?: number;
   select?: (limit: number, now: number) => ProbeCandidate[];
+  /** Called after each model finishes, so an async operator check can report progress. */
+  onProgress?: (done: number, total: number) => void;
   /** Operator checks run several models at once; the scheduled pass stays serial. */
   concurrency?: number;
   /** Operator-requested pass: ignore first-sighting stagger and backoff. */
@@ -381,6 +385,7 @@ export async function runModelProbePass(opts: ProbePassOptions = {}): Promise<Pr
       );
     }
     recordProbeResult(getDb(), candidate, outcome);
+      opts.onProgress?.(outcomes.length, candidates.length);
     }
   };
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
