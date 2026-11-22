@@ -153,6 +153,8 @@ healthRouter.post('/probe-models', async (req: Request, res: Response) => {
     ? await runModelProbePass({
         force: true,
         maxProbes: limit,
+        concurrency: 6,
+        timeoutMs: 8_000,
         select: () => selectProviderProbeCandidates(getDb(), platform, endpointScope, limit),
       })
     : await runModelProbePass();

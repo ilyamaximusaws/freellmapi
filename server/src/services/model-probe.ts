@@ -183,10 +183,12 @@ export function selectProviderProbeCandidates(
 export interface ModelProbeRequestDeps {
   // Test seam: the chat call the probe makes. Production uses the provider's
   // own chatCompletion through the key's proxy.
-  chat?: (candidate: ProbeCandidate) => Promise<unknown>;
+  chat?: (candidate: ProbeCandidate, timeoutMs?: number) => Promise<unknown>;
+  /** Per-model wire deadline. Operator checks use a short one to stay snappy. */
+  timeoutMs?: number;
 }
 
-async function probeChat(candidate: ProbeCandidate): Promise<void> {
+async function probeChat(candidate: ProbeCandidate, timeoutMs = PROBE_TIMEOUT_MS): Promise<void> {
   const db = getDb();
   const row = db.prepare('SELECT * FROM api_keys WHERE id = ? AND enabled = 1').get(candidate.keyId) as any;
   if (!row) throw new Error('key not found or disabled');
@@ -201,7 +203,7 @@ async function probeChat(candidate: ProbeCandidate): Promise<void> {
     { role: 'user', content: 'Reply with OK' },
   ], candidate.modelId, {
     max_tokens: PROBE_MAX_TOKENS,
-    timeoutMs: PROBE_TIMEOUT_MS,
+    timeoutMs: timeoutMs ?? PROBE_TIMEOUT_MS,
   } as any, {
     platform: candidate.platform as any,
     keyId: candidate.keyId,
@@ -225,14 +227,32 @@ async function probeChat(candidate: ProbeCandidate): Promise<void> {
 export async function probeModel(candidate: ProbeCandidate, deps: ModelProbeRequestDeps = {}): Promise<ProbeOutcome> {
   const started = Date.now();
   const chat = deps.chat ?? probeChat;
+  let timer: NodeJS.Timeout | undefined;
   try {
-    await chat(candidate);
+    if (deps.timeoutMs) {
+      // Provider adapters do not all honour timeoutMs; the caller's deadline is
+      // authoritative so an operator check cannot hang on one dead endpoint.
+      await Promise.race([
+        chat(candidate, deps.timeoutMs),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            const error = new Error(`probe timed out after ${deps.timeoutMs}ms`);
+            error.name = 'AbortError';
+            reject(error);
+          }, deps.timeoutMs);
+        }),
+      ]);
+    } else {
+      await chat(candidate, deps.timeoutMs);
+    }
     return { status: 'working', latencyMs: Date.now() - started };
   } catch (err: any) {
     const message = sanitizeProviderErrorMessage(err?.message ?? err);
     const transport = /(?:fetch failed|network|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|certificate|TLS|timeout)/i.test(message);
     if (transport || err?.name === 'AbortError') return { status: 'error', error: message };
     return { status: 'unavailable', error: message };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -299,6 +319,8 @@ export interface ProbePassOptions extends ModelProbeRequestDeps {
   jitter?: () => number; // [0, 1), defaults to Math.random
   maxProbes?: number;
   select?: (limit: number, now: number) => ProbeCandidate[];
+  /** Operator checks run several models at once; the scheduled pass stays serial. */
+  concurrency?: number;
   /** Operator-requested pass: ignore first-sighting stagger and backoff. */
   force?: boolean;
 }
@@ -315,9 +337,12 @@ export async function runModelProbePass(opts: ProbePassOptions = {}): Promise<Pr
   const probed: ProbeCandidate[] = [];
   const outcomes: ProbePassResult['outcomes'] = [];
 
-  for (const candidate of candidates) {
-    if (probed.length >= maxProbes) break;
-    const key = stateKey(candidate);
+  const queue = [...candidates];
+  const workerCount = Math.max(1, Math.min(opts.concurrency ?? 1, queue.length));
+  const worker = async () => {
+    while (queue.length > 0 && probed.length < maxProbes) {
+      const candidate = queue.shift()!;
+      const key = stateKey(candidate);
     const existing = probeState.get(key);
     if (!opts.force) {
       if (!existing) {
@@ -356,7 +381,9 @@ export async function runModelProbePass(opts: ProbePassOptions = {}): Promise<Pr
       );
     }
     recordProbeResult(getDb(), candidate, outcome);
-  }
+    }
+  };
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
   return { probed, outcomes };
 }

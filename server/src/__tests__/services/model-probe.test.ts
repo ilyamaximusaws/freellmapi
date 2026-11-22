@@ -88,6 +88,27 @@ describe('candidate selection', () => {
     expect(pass.outcomes[0].outcome.status).toBe('working');
   });
 
+  it('runs an operator pass concurrently instead of serialising dead endpoints', async () => {
+    const list = seedCandidates(6);
+    const chat = vi.fn(async () => { await new Promise(resolve => setTimeout(resolve, 120)); return {}; });
+    const started = Date.now();
+    const pass = await runModelProbePass({
+      select: selectFrom(list), maxProbes: 6, force: true, concurrency: 6, timeoutMs: 1000, chat,
+    });
+    expect(pass.outcomes).toHaveLength(6);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('enforces the caller deadline when the adapter hangs', async () => {
+    const list = seedCandidates(1);
+    const pass = await runModelProbePass({
+      select: selectFrom(list), maxProbes: 1, force: true, timeoutMs: 25,
+      chat: () => new Promise(() => { /* never resolves */ }),
+    });
+    expect(pass.outcomes[0].outcome.status).toBe('error');
+    expect(pass.outcomes[0].outcome.error).toContain('timed out');
+  });
+
   it('probes the stalest evidence first, never-probed before stale', () => {
     const db = getDb();
     addModel(1, 'old');
@@ -183,7 +204,7 @@ describe('probe pass', () => {
 
   it('a working probe clears pacing so the model is not re-probed until stale', async () => {
     const list = seedCandidates(1);
-    const chat = chatOk;
+    const chat = chatOk();
     await runModelProbePass({ chat, jitter: noJitter, select: selectFrom(list) });
     await runModelProbePass({ chat, jitter: noJitter, select: selectFrom(list) });
     // Third pass: the single candidate just worked; nothing is probeable.
