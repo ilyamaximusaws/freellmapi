@@ -8,6 +8,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { getDb } from '../db/index.js';
+import { buildServingKeyIndex } from '../lib/serving-keys.js';
 import { monthlyBudgetScore } from '../lib/budget.js';
 
 export const profilesRouter = Router();
@@ -70,13 +71,40 @@ profilesRouter.get('/', (_req: Request, res: Response) => {
   const db = getDb();
   const profiles = db.prepare(`
     SELECT p.id, p.name, p.emoji, p.color, p.type, p.is_favorite, p.sort_order, p.auto_sort,
-           p.routing_strategy, p.layout_config, p.auto_include_new_models, p.created_at,
-           (SELECT COUNT(*) FROM profile_models pm WHERE pm.profile_id = p.id) AS model_count,
-           (SELECT COUNT(*) FROM profile_models pm JOIN models m ON m.id = pm.model_db_id
-             WHERE pm.profile_id = p.id AND pm.enabled = 1 AND m.enabled = 1) AS enabled_count
+           p.routing_strategy, p.layout_config, p.auto_include_new_models, p.created_at
     FROM profiles p
     ORDER BY (CASE WHEN p.type = 'default' THEN 1 ELSE 0 END) DESC, p.is_favorite DESC, p.sort_order ASC, p.id ASC
   `).all() as Array<Record<string, unknown> & { id: number }>;
+
+  // Chain size, counted the way the Models page counts: LOGICAL models (one per
+  // model id, however many providers offer it) that this install can actually
+  // serve. Counting profile_models rows made a 700-row chain of a 250-model
+  // catalog advertise "427 routable", because rows for ~60 platforms with no
+  // credential here were counted as routing capacity.
+  const serving = buildServingKeyIndex(db);
+  const chainRows = db.prepare(`
+    SELECT pm.profile_id AS profileId, pm.enabled AS chainEnabled,
+           m.model_id AS modelId, m.platform AS platform,
+           m.endpoint_scope AS endpointScope, m.key_id AS keyId,
+           m.enabled AS catalogEnabled
+    FROM profile_models pm
+    JOIN models m ON m.id = pm.model_db_id
+  `).all() as Array<{
+    profileId: number; chainEnabled: number; modelId: string; platform: string;
+    endpointScope: string | null; keyId: number | null; catalogEnabled: number;
+  }>;
+
+  // Routable = all three gates open, and one model id only has to clear them
+  // once: if any provider can serve it, the chain can route it.
+  const servable = new Map<number, Set<string>>();
+  const routable = new Map<number, Set<string>>();
+  for (const row of chainRows) {
+    const target = { platform: row.platform, model_id: row.modelId, endpoint_scope: row.endpointScope, key_id: row.keyId };
+    if (!serving.configured(target)) continue;
+    (servable.get(row.profileId) ?? servable.set(row.profileId, new Set()).get(row.profileId)!).add(row.modelId);
+    if (row.chainEnabled !== 1 || row.catalogEnabled !== 1 || serving.count(target) === 0) continue;
+    (routable.get(row.profileId) ?? routable.set(row.profileId, new Set()).get(row.profileId)!).add(row.modelId);
+  }
 
   // Which chain the Routing page writes into. Without it a chain list cannot say
   // where the operator's edits actually land.
@@ -93,8 +121,9 @@ profilesRouter.get('/', (_req: Request, res: Response) => {
     routingStrategy: profile.routing_strategy,
     autoIncludeNewModels: profile.auto_include_new_models === 1,
     createdAt: profile.created_at,
-    modelCount: Number(profile.model_count ?? 0),
-    enabledCount: Number(profile.enabled_count ?? 0),
+    // Same units as the Models page: logical models, and the subset that routes.
+    modelCount: servable.get(profile.id)?.size ?? 0,
+    enabledCount: routable.get(profile.id)?.size ?? 0,
     isActive: profile.id === activeId,
   })));
 });

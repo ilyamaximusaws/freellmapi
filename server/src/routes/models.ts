@@ -16,7 +16,7 @@ import {
 import { pruneUnavailableSavedFusionConfig } from '../services/fusion.js';
 import { getActiveProfileId, ensureModelInProfiles } from '../services/profile-models.js';
 import { endpointScopeForBaseUrl, endpointScopeOfKey, qualifiedModelMemberId } from '../lib/endpoint-scope.js';
-import { parseModelScope, scopeAllows } from '../lib/model-scope.js';
+import { buildServingKeyIndex } from '../lib/serving-keys.js';
 import { clearCustomModelTombstone, recordCustomModelTombstone } from '../services/custom-model-tombstone.js';
 import { customModelSeed } from '../services/custom-model-seed.js';
 import { routePinnedModel, failureAttributionFor } from '../services/router.js';
@@ -536,52 +536,11 @@ modelsRouter.get('/', (_req: Request, res: Response) => {
 
   // One effective projection for every page: a row is only routable when the
   // catalog allows it, the active chain allows it, and at least one enabled
-  // account actually scopes the model in. Computing this server-side stops
-  // Models/Routing/Providers from each inventing their own answer.
-  const allKeys = db.prepare(`
-    SELECT id, platform, base_url, model_scope_json, enabled
-      FROM api_keys
-  `).all() as Array<{ id: number; platform: string; base_url: string | null; model_scope_json: string | null; enabled: number }>;
-  const ownerEndpoint = new Map(allKeys.map(key => [key.id, endpointScopeForBaseUrl(key.base_url)]));
-  // A provider only "exists" for this install when at least one credential is
-  // configured for it — enabled or not. The published catalog carries rows for
-  // ~60 platforms nobody here has a key for (groq was the visible one); showing
-  // them everywhere made dead providers look connected.
-  const configuredPlatforms = new Set(allKeys.map(key => key.platform));
-  const configuredEndpoints = new Set(
-    allKeys.filter(key => key.platform === 'custom').map(key => endpointScopeForBaseUrl(key.base_url)),
-  );
-  const keysByPlatform = new Map<string, Array<{ id: number; endpoint: string; scope: Set<string> | null }>>();
-  for (const key of allKeys) {
-    if (key.enabled !== 1) continue;
-    const list = keysByPlatform.get(key.platform) ?? [];
-    list.push({
-      id: key.id,
-      endpoint: key.platform === 'custom' ? endpointScopeForBaseUrl(key.base_url) : '',
-      scope: parseModelScope(key.model_scope_json),
-    });
-    keysByPlatform.set(key.platform, list);
-  }
-
-  const modelEndpointOf = (m: any): string => (m.endpoint_scope
-    ? endpointScopeForBaseUrl(m.endpoint_scope)
-    : (m.key_id == null ? '' : ownerEndpoint.get(m.key_id) ?? ''));
-
-  const isConfigured = (m: any): boolean => (m.platform === 'custom'
-    ? configuredEndpoints.has(modelEndpointOf(m))
-    : configuredPlatforms.has(m.platform));
-
-  const servingKeyCount = (m: any): number => {
-    const keys = keysByPlatform.get(m.platform) ?? [];
-    if (keys.length === 0) return 0;
-    if (m.platform !== 'custom') {
-      return keys.filter(key => scopeAllows(key.scope, m.model_id)).length;
-    }
-    const modelEndpoint = modelEndpointOf(m);
-    if (!modelEndpoint) return 0;
-    return keys.filter(key => key.endpoint === modelEndpoint
-      && scopeAllows(key.scope, m.model_id)).length;
-  };
+  // account actually scopes the model in. The credential half lives in
+  // lib/serving-keys.ts so this route and the chain listing cannot disagree.
+  const serving = buildServingKeyIndex(db);
+  const servingKeyCount = (m: any): number => serving.count(m);
+  const isConfigured = (m: any): boolean => serving.configured(m);
 
   const result = models.map(m => {
     const servingCount = servingKeyCount(m);
