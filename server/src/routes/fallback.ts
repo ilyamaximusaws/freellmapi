@@ -19,6 +19,7 @@ import { overriddenFieldNames } from '../services/model-state.js';
 import { parseModelScope, scopeAllows } from '../lib/model-scope.js';
 import { getQuotaOutlook } from '../services/quota-outlook.js';
 import { getDecisionRoutingStatus, setDecisionRoutingSettings } from '../services/routing-decision.js';
+import { isCustomRoutingEnabled, setCustomRoutingEnabled } from '../services/routing-mode.js';
 
 export const fallbackRouter = Router();
 
@@ -40,6 +41,9 @@ fallbackRouter.get('/routing', (_req: Request, res: Response) => {
     peakEndHour: peakHours.endHour,
     peakTimezone: peakHours.timezone,
     cooldownCeilingMs: getCooldownCeilingMs(),
+    // Named chains are a mode, not a strategy: when this is off the router reads
+    // the global table and the Custom routing page is not part of the product.
+    customRoutingEnabled: isCustomRoutingEnabled(),
     // Decision routing (#1354): its settings, whether a decision model is
     // usable, and since-boot picks. Present whatever the active strategy is.
     decision: getDecisionRoutingStatus(),
@@ -79,6 +83,10 @@ const routingSchema = z.object({
   // `strategy`, which ranks MODELS — the two are set from the same form, so
   // they round-trip through the same request.
   keySelectionStrategy: z.enum(['auto', 'least-remaining']).optional(),
+  // Named-chain mode, not a model strategy: on means the router reads one chain
+  // from profile_models and the dashboard shows the Custom routing page. Off
+  // clears the active chain so routing uses the built-in global table.
+  customRoutingEnabled: z.boolean().optional(),
   // Ceiling on automatic cooldowns (#952): 1 min .. 24 h in ms, null = no cap
   // (the escalation ladder keeps its 24h top step and 402/403 bench a day).
   cooldownCeilingMs: z.number().int()
@@ -118,6 +126,12 @@ fallbackRouter.put('/routing', (req: Request, res: Response) => {
   if (parsed.data.keySelectionStrategy !== undefined) {
     setKeySelectionStrategy(parsed.data.keySelectionStrategy);
   }
+  // Applied last: switching the mode off clears the active chain pointer, and
+  // switching it on restores one, so nothing else in this handler can leave the
+  // mode and the pointer disagreeing.
+  if (parsed.data.customRoutingEnabled !== undefined) {
+    setCustomRoutingEnabled(parsed.data.customRoutingEnabled);
+  }
   if (parsed.data.cooldownCeilingMs !== undefined) {
     setCooldownCeilingMs(parsed.data.cooldownCeilingMs);
   }
@@ -143,6 +157,7 @@ fallbackRouter.put('/routing', (req: Request, res: Response) => {
     strategy: getRoutingStrategy(),
     exploreEnabled: getExploreEnabled(),
     keySelectionStrategy: getKeySelectionStrategy(),
+    customRoutingEnabled: isCustomRoutingEnabled(),
     decision: getDecisionRoutingStatus(),
     presets: BANDIT_PRESETS,
     weights: active.weights,

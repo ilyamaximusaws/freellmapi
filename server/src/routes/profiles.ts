@@ -9,6 +9,7 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { getDb } from '../db/index.js';
 import { buildServingKeyIndex } from '../lib/serving-keys.js';
+import { syncModeWithActiveProfile } from '../services/routing-mode.js';
 import { monthlyBudgetScore } from '../lib/budget.js';
 
 export const profilesRouter = Router();
@@ -143,7 +144,10 @@ profilesRouter.post('/active', (req: Request, res: Response) => {
 
   if (profileId === null || profileId === undefined) {
     db.prepare(`DELETE FROM settings WHERE key = 'active_profile_id'`).run();
-    res.json({ activeProfileId: null });
+    // Clearing the chain is the same thing as switching named chains off, so the
+    // mode flag follows instead of leaving a dangling "on" with nothing behind it.
+    syncModeWithActiveProfile(null);
+    res.json({ activeProfileId: null, customRoutingEnabled: false });
     return;
   }
 
@@ -157,7 +161,8 @@ profilesRouter.post('/active', (req: Request, res: Response) => {
     INSERT INTO settings (key, value) VALUES ('active_profile_id', ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `).run(String(profileId));
-  res.json({ activeProfileId: Number(profileId) });
+  syncModeWithActiveProfile(Number(profileId));
+  res.json({ activeProfileId: Number(profileId), customRoutingEnabled: true });
 });
 
 // GET /api/profiles/:id/models — get profile model order
@@ -429,6 +434,11 @@ profilesRouter.delete('/:id', (req: Request, res: Response) => {
     const fallbackId = defaultProf?.id ?? (db.prepare('SELECT id FROM profiles ORDER BY sort_order ASC LIMIT 1').get() as { id: number })?.id;
     if (fallbackId) {
       db.prepare(`INSERT INTO settings (key, value) VALUES ('active_profile_id', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(fallbackId));
+    } else {
+      // Nothing left to fall back to: the chain pointer is gone, so named-chain
+      // mode cannot stay on.
+      db.prepare(`DELETE FROM settings WHERE key = 'active_profile_id'`).run();
+      syncModeWithActiveProfile(null);
     }
   }
 
